@@ -151,3 +151,36 @@ def insert_staging_ticket(
     finally:
         if should_close:
             conn.close()
+
+
+def register_churn_udf(
+    conn: Optional[pyexasol.ExaConnection] = None,
+    bucketfs_path: Optional[str] = None,
+) -> None:
+    """
+    Registers the EXA_DB.PREDICT_CHURN_SCORE Python3 scalar UDF in Exasol.
+    If conn is None, creates a temporary connection.
+
+    Args:
+        conn: Optional active pyexasol connection.
+        bucketfs_path: Optional custom mounted container path to model weights in BucketFS.
+    """
+    from backend.core.exasol_udf import get_churn_udf_sql
+
+    should_close = False
+    if conn is None:
+        conn = get_exasol_connection()
+        should_close = True
+
+    try:
+        logger.info("Registering EXA_DB.PREDICT_CHURN_SCORE UDF in Exasol...")
+        conn.execute(CREATE_SCHEMA_QUERY)
+        udf_sql = get_churn_udf_sql(bucketfs_model_path=bucketfs_path)
+        conn.execute(udf_sql)
+        logger.info("EXA_DB.PREDICT_CHURN_SCORE UDF registered successfully.")
+    except Exception as exc:
+        logger.error(f"Failed to register churn UDF in Exasol: {exc}")
+        raise
+    finally:
+        if should_close:
+            conn.close()

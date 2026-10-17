@@ -21,7 +21,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.api.v1.endpoints.checkout import MOCK_INVENTORY_LEDGER
 
 
 @pytest.fixture

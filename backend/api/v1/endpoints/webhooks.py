@@ -8,9 +8,8 @@ API timeouts and decouple fast-ingest from in-database NLP analytics in Exasol.
 
 import uuid
 import logging
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, status
 from backend.schemas.webhook import ZendeskTicketPayload, WebhookResponse
-from backend.core.config import settings
 
 logger = logging.getLogger("omnisync.webhooks")
 

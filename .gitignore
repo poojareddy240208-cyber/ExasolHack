@@ -65,6 +65,8 @@ venv.bak/
 # Model Weights and Artifacts
 /weights/
 weights/
+/models/
+models/
 *.pt
 *.pth
 *.onnx

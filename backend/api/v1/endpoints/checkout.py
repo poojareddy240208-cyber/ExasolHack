@@ -17,7 +17,7 @@ Architectural Separation:
 import uuid
 import logging
 from typing import Dict, Any
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, status
 from backend.schemas.checkout import (
     CheckoutRequest,
     CheckoutResponse,

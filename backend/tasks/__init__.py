@@ -1,3 +1,0 @@
-"""
-OmniSync Asynchronous Task Modules.
-"""

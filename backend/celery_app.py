@@ -77,7 +77,7 @@ def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[st
     Workflow:
     1. Validates and extracts ticket fields (ticket_id, user_id/email, created_at, comment/description).
     2. Runs comment/description through NLP cleaner (strips HTML, control characters, excess whitespace).
-    3. Inserts the record into EXA_DB.STAGING_ZENDESK_TICKETS via PyExasol with STATUS='PENDING'.
+    3. Inserts the record into OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS via PyExasol with STATUS='PENDING'.
     4. Triggers Celery retry logic on database connection errors.
 
     Args:
@@ -186,7 +186,7 @@ def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[st
         "raw_text_length": len(raw_text),
         "cleaned_text_length": len(cleaned_text),
         "created_at": created_at,
-        "staging_table": "EXA_DB.STAGING_ZENDESK_TICKETS",
+        "staging_table": "OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS",
     }
 
 

@@ -19,7 +19,7 @@ DEFAULT_BUCKETFS_MODEL_PATH = (
 
 def get_churn_udf_sql(bucketfs_model_path: Optional[str] = None) -> str:
     """
-    Returns the SQL statement to register EXA_DB.PREDICT_CHURN_SCORE in Exasol.
+    Returns the SQL statement to register OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE in Exasol.
 
     Args:
         bucketfs_model_path: Absolute mounted container path to model weights in BucketFS.
@@ -27,7 +27,7 @@ def get_churn_udf_sql(bucketfs_model_path: Optional[str] = None) -> str:
     """
     model_path = bucketfs_model_path or DEFAULT_BUCKETFS_MODEL_PATH
 
-    sql = f"""CREATE OR REPLACE PYTHON3 SCALAR SCRIPT EXA_DB.PREDICT_CHURN_SCORE(cleaned_text VARCHAR(4000))
+    sql = f"""CREATE OR REPLACE PYTHON3 SCALAR SCRIPT OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE(cleaned_text VARCHAR(4000))
 EMITS (churn_score DOUBLE) AS
 
 import os

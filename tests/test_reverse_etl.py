@@ -47,7 +47,7 @@ def test_export_statements_use_export_into_jdbc_with_matching_placeholders():
 
 def test_beat_schedule_syncs_every_5_minutes_and_tasks_are_registered():
     entries = {entry["task"]: entry for entry in celery.conf.beat_schedule.values()}
-    assert entries["backend.celery_app.trigger_exasol_return_risk_sync"]["schedule"] == 300.0
+    assert entries["backend.celery_app.trigger_exasol_return_risk_sync"]["schedule"] == 900.0
     assert "backend.celery_app.trigger_identity_stitching_batch" in entries
     for task_name in entries:
         assert task_name in celery.tasks, f"{task_name} is scheduled but not registered"

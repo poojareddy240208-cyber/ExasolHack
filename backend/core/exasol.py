@@ -18,10 +18,10 @@ from backend.core.config import settings
 logger = logging.getLogger("omnisync.exasol")
 
 # Schema & Table DDL definitions
-CREATE_SCHEMA_QUERY = "CREATE SCHEMA IF NOT EXISTS EXA_DB;"
+CREATE_SCHEMA_QUERY = "CREATE SCHEMA IF NOT EXISTS OMNISYNC_ANALYTICS;"
 
 CREATE_STAGING_TABLE_QUERY = """
-CREATE TABLE IF NOT EXISTS EXA_DB.STAGING_ZENDESK_TICKETS (
+CREATE TABLE IF NOT EXISTS OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS (
     TICKET_ID VARCHAR(64) PRIMARY KEY,
     USER_ID VARCHAR(64),
     RAW_TEXT VARCHAR(4000),
@@ -71,7 +71,7 @@ def get_exasol_connection(
 
 def init_staging_table(conn: Optional[pyexasol.ExaConnection] = None) -> None:
     """
-    Ensures that the EXA_DB schema and STAGING_ZENDESK_TICKETS table exist in Exasol.
+    Ensures that the OMNISYNC_ANALYTICS schema and STAGING_ZENDESK_TICKETS table exist in Exasol.
     If a connection is not provided, a temporary connection is opened and closed.
 
     Args:
@@ -84,11 +84,11 @@ def init_staging_table(conn: Optional[pyexasol.ExaConnection] = None) -> None:
         should_close = True
 
     try:
-        logger.info("Verifying/creating Exasol schema and staging table EXA_DB.STAGING_ZENDESK_TICKETS...")
+        logger.info("Verifying/creating Exasol schema and staging table OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS...")
         conn.execute(CREATE_SCHEMA_QUERY)
         conn.execute(CREATE_STAGING_TABLE_QUERY)
         _STAGING_TABLE_INITIALIZED = True
-        logger.info("Exasol staging table EXA_DB.STAGING_ZENDESK_TICKETS verified successfully.")
+        logger.info("Exasol staging table OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS verified successfully.")
     except Exception as exc:
         logger.error(f"Failed to initialize Exasol staging table: {exc}")
         raise
@@ -107,7 +107,7 @@ def insert_staging_ticket(
     conn: Optional[pyexasol.ExaConnection] = None,
 ) -> None:
     """
-    Inserts a cleaned Zendesk ticket record into EXA_DB.STAGING_ZENDESK_TICKETS using pyexasol.
+    Inserts a cleaned Zendesk ticket record into OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS using pyexasol.
     Initializes the staging table on first invocation if not already completed.
 
     Args:
@@ -129,7 +129,7 @@ def insert_staging_ticket(
             init_staging_table(conn)
 
         insert_sql = """
-        INSERT INTO EXA_DB.STAGING_ZENDESK_TICKETS
+        INSERT INTO OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS
         (TICKET_ID, USER_ID, RAW_TEXT, CLEANED_TEXT, CREATED_AT, STATUS)
         VALUES ({ticket_id}, {user_id}, {raw_text}, {cleaned_text}, {created_at}, {status})
         """
@@ -142,7 +142,7 @@ def insert_staging_ticket(
             "status": str(status)[:20],
         }
         conn.execute(insert_sql, query_params=params)
-        logger.info(f"Inserted ticket {ticket_id} into EXA_DB.STAGING_ZENDESK_TICKETS.")
+        logger.info(f"Inserted ticket {ticket_id} into OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS.")
     except pyexasol.ExaQueryError as eqe:
         # If table was dropped or missing, attempt self-healing initialization and retry once
         logger.warning(f"Exasol query error during staging insert ({eqe}). Retrying after table initialization...")
@@ -158,7 +158,7 @@ def register_churn_udf(
     bucketfs_path: Optional[str] = None,
 ) -> None:
     """
-    Registers the EXA_DB.PREDICT_CHURN_SCORE Python3 scalar UDF in Exasol.
+    Registers the OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE Python3 scalar UDF in Exasol.
     If conn is None, creates a temporary connection.
 
     Args:
@@ -173,11 +173,11 @@ def register_churn_udf(
         should_close = True
 
     try:
-        logger.info("Registering EXA_DB.PREDICT_CHURN_SCORE UDF in Exasol...")
+        logger.info("Registering OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE UDF in Exasol...")
         conn.execute(CREATE_SCHEMA_QUERY)
         udf_sql = get_churn_udf_sql(bucketfs_model_path=bucketfs_path)
         conn.execute(udf_sql)
-        logger.info("EXA_DB.PREDICT_CHURN_SCORE UDF registered successfully.")
+        logger.info("OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE UDF registered successfully.")
     except Exception as exc:
         logger.error(f"Failed to register churn UDF in Exasol: {exc}")
         raise

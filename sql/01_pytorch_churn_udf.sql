@@ -1,14 +1,14 @@
 -- ============================================================================
 -- OmniSync - Module 2: PyTorch NLP Churn Early Warning UDF
--- Registers EXA_DB.PREDICT_CHURN_SCORE inside Exasol Personal Edition
+-- Registers OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE inside Exasol Personal Edition
 -- Model weights mounted natively from BucketFS: /buckets/bfsdefault/models/distilbert-churn/
 -- ============================================================================
 
 -- Ensure target schema exists
-CREATE SCHEMA IF NOT EXISTS EXA_DB;
+CREATE SCHEMA IF NOT EXISTS OMNISYNC_ANALYTICS;
 
 --/
-CREATE OR REPLACE PYTHON3 SCALAR SCRIPT EXA_DB.PREDICT_CHURN_SCORE(cleaned_text VARCHAR(4000))
+CREATE OR REPLACE PYTHON3 SCALAR SCRIPT OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE(cleaned_text VARCHAR(4000))
 EMITS (churn_score DOUBLE) AS
 
 import os

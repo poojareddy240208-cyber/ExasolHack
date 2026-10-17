@@ -121,7 +121,7 @@ class TestExasolStaging:
         sql = last_call[0][0]
         params = last_call[1]["query_params"]
 
-        assert "INSERT INTO EXA_DB.STAGING_ZENDESK_TICKETS" in sql
+        assert "INSERT INTO OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS" in sql
         assert params["ticket_id"] == "ZD-9999"
         assert params["user_id"] == "user_test_123"
         assert params["raw_text"] == "<p>Raw text</p>"
@@ -150,7 +150,7 @@ class TestProcessZendeskTicketTask:
         assert result["status"] == "STAGED"
         assert result["ticket_id"] == "ZD-101"
         assert result["user_id"] == "user_456"
-        assert result["staging_table"] == "EXA_DB.STAGING_ZENDESK_TICKETS"
+        assert result["staging_table"] == "OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS"
         assert result["created_at"] == "2026-10-17 10:00:00"
 
         # Verify insert_staging_ticket received sanitized text

@@ -22,6 +22,13 @@ celery[redis]>=5.3.6
 streamlit>=1.32.0
 pandas>=2.2.0
 
+# Machine Learning & In-Database Analytics
+lightgbm>=4.0.0
+numpy>=1.26.0
+scikit-learn>=1.4.0
+torch>=2.0.0
+transformers>=4.38.0
+
 # PDF Generation & Reporting
 weasyprint>=61.0
 

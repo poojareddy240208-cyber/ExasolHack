@@ -1,0 +1,236 @@
+"""
+Reverse ETL: copy the newly calculated Module 3 metrics from Exasol down to PostgreSQL.
+
+Exasol is passive. This module is called by Celery Beat, and Celery issues the `EXPORT ... INTO JDBC`
+statements; Exasol never pushes or schedules anything itself.
+
+Why a stage table: `EXPORT ... INTO JDBC` can only INSERT. So each run is
+
+    1. take an advisory lock, so two overlapping runs cannot corrupt the stage tables
+    2. empty the PostgreSQL stage tables
+    3. Exasol EXPORT  ->  golden_customers_stage, user_risk_cache_stage
+    4. check the stage row counts match what Exasol exported
+    5. in ONE PostgreSQL transaction: upsert stage -> serving tables and delete rows that vanished
+
+FastAPI only ever reads the serving tables (primary-key lookups), so checkout latency is unaffected, and
+a failed run leaves the previous values in place.
+
+One-time setup (creates the Exasol connection object the EXPORT uses):
+    python -m backend.services.reverse_etl --setup --localhost
+Requires the PostgreSQL JDBC driver to be available to Exasol (bundled in 7.1; newer versions need a
+driver entry in the Exasol settings.cfg - see the Exasol "Load data from PostgreSQL" guide).
+"""
+
+import argparse
+import logging
+from typing import Dict, Optional
+
+from backend.core.config import settings
+from backend.services.exasol_client import connect_exasol
+from backend.services.postgres_client import connect_postgres
+
+logger = logging.getLogger("omnisync.reverse_etl")
+
+SCHEMA = "OMNISYNC_ANALYTICS"
+EXASOL_CONNECTION = "POSTGRES_OMNISYNC"
+ADVISORY_LOCK_ID = 730_001  # arbitrary constant shared by every sync run
+
+# (Exasol source query, PostgreSQL stage table, stage columns)
+EXPORTS: Dict[str, Dict[str, object]] = {
+    "golden_customers": {
+        "source": (
+            "SELECT GOLDEN_CUSTOMER_ID, PRIMARY_EMAIL, MEMBER_COUNT, TOTAL_SPEND_USD, FIRST_SEEN_AT, LAST_SEEN_AT "
+            "FROM GOLDEN_CUSTOMERS"
+        ),
+        "stage": "golden_customers_stage",
+        "columns": [
+            "golden_customer_id",
+            "primary_email",
+            "member_count",
+            "total_spend_usd",
+            "first_seen_at",
+            "last_seen_at",
+        ],
+    },
+    "user_risk_cache": {
+        "source": (
+            "SELECT USER_ID, GOLDEN_CUSTOMER_ID, RISK_LEVEL, RETURN_RATE, PURCHASES_6M, RETURNS_6M, COMPUTED_AT "
+            "FROM USER_RETURN_RISK"
+        ),
+        "stage": "user_risk_cache_stage",
+        "columns": [
+            "user_id",
+            "golden_customer_id",
+            "risk_level",
+            "return_rate",
+            "purchases_6m",
+            "returns_6m",
+            "computed_at",
+        ],
+    },
+}
+
+# Upsert stage -> serving inside one transaction. DISTINCT ON guards against duplicate keys in a stage table.
+UPSERT_SQL = [
+    """
+    INSERT INTO golden_customers
+        (golden_customer_id, primary_email, member_count, total_spend_usd, first_seen_at, last_seen_at, synced_at)
+    SELECT DISTINCT ON (golden_customer_id)
+        golden_customer_id, primary_email, member_count, total_spend_usd, first_seen_at, last_seen_at, now()
+    FROM golden_customers_stage
+    WHERE golden_customer_id IS NOT NULL
+    ORDER BY golden_customer_id
+    ON CONFLICT (golden_customer_id) DO UPDATE SET
+        primary_email = EXCLUDED.primary_email,
+        member_count = EXCLUDED.member_count,
+        total_spend_usd = EXCLUDED.total_spend_usd,
+        first_seen_at = EXCLUDED.first_seen_at,
+        last_seen_at = EXCLUDED.last_seen_at,
+        synced_at = EXCLUDED.synced_at
+    """,
+    """
+    DELETE FROM golden_customers
+    WHERE golden_customer_id NOT IN
+        (SELECT golden_customer_id FROM golden_customers_stage WHERE golden_customer_id IS NOT NULL)
+    """,
+    """
+    INSERT INTO user_risk_cache
+        (user_id, golden_customer_id, risk_level, return_rate, purchases_6m, returns_6m, computed_at, synced_at)
+    SELECT DISTINCT ON (user_id)
+        user_id, golden_customer_id, risk_level, return_rate, purchases_6m, returns_6m, computed_at, now()
+    FROM user_risk_cache_stage
+    WHERE user_id IS NOT NULL
+    ORDER BY user_id, computed_at DESC
+    ON CONFLICT (user_id) DO UPDATE SET
+        golden_customer_id = EXCLUDED.golden_customer_id,
+        risk_level = EXCLUDED.risk_level,
+        return_rate = EXCLUDED.return_rate,
+        purchases_6m = EXCLUDED.purchases_6m,
+        returns_6m = EXCLUDED.returns_6m,
+        computed_at = EXCLUDED.computed_at,
+        synced_at = EXCLUDED.synced_at
+    """,
+    """
+    DELETE FROM user_risk_cache
+    WHERE user_id NOT IN (SELECT user_id FROM user_risk_cache_stage WHERE user_id IS NOT NULL)
+    """,
+]
+
+
+def build_export_statement(name: str) -> str:
+    """
+    Build the Exasol `EXPORT ... INTO JDBC` statement for one table.
+
+    The explicit STATEMENT form is used so PostgreSQL identifiers stay lower-case and unquoted.
+    """
+    spec = EXPORTS[name]
+    columns = ", ".join(spec["columns"])
+    placeholders = ", ".join("?" for _ in spec["columns"])
+    return (
+        f"EXPORT ({spec['source']}) INTO JDBC AT {EXASOL_CONNECTION} "
+        f"STATEMENT 'INSERT INTO {spec['stage']} ({columns}) VALUES ({placeholders})'"
+    )
+
+
+def create_exasol_connection(host: Optional[str] = None, postgres_host_for_exasol: Optional[str] = None) -> None:
+    """
+    One-time setup: create the Exasol CONNECTION object that points at PostgreSQL.
+
+    Args:
+        host: where this script reaches Exasol ("localhost" outside docker-compose).
+        postgres_host_for_exasol: how the Exasol container reaches PostgreSQL (docker service name by default).
+    """
+    pg_host = postgres_host_for_exasol or settings.POSTGRES_HOST
+    url = f"jdbc:postgresql://{pg_host}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}"
+    user = settings.POSTGRES_USER.replace("'", "''")
+    password = settings.POSTGRES_PASSWORD.replace("'", "''")
+    conn = connect_exasol(host=host, schema=SCHEMA)
+    try:
+        conn.execute(
+            f"CREATE OR REPLACE CONNECTION {EXASOL_CONNECTION} TO '{url}' USER '{user}' IDENTIFIED BY '{password}'"
+        )
+    finally:
+        conn.close()
+    logger.info("[reverse-etl] Exasol connection %s created for %s", EXASOL_CONNECTION, url)
+
+
+def sync_module3_to_postgres(
+    exasol_host: Optional[str] = None, postgres_host: Optional[str] = None
+) -> Dict[str, object]:
+    """
+    Copy golden customers and return risk levels from Exasol to PostgreSQL.
+
+    Returns:
+        {"status": "SKIPPED"} when another sync holds the lock, otherwise {"status": "SYNC_COMPLETE", counts...}.
+    """
+    pg = connect_postgres(postgres_host)
+    try:
+        with pg.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_ID,))
+            if not cur.fetchone()[0]:
+                logger.warning("[reverse-etl] another sync is running, skipping this run")
+                return {"status": "SKIPPED"}
+        try:
+            return _run_sync(pg, exasol_host)
+        finally:
+            with pg.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_ID,))
+            pg.commit()
+    finally:
+        pg.close()
+
+
+def _run_sync(pg, exasol_host: Optional[str]) -> Dict[str, object]:
+    """Stage, verify and upsert. Raises (leaving the old serving data untouched) on any problem."""
+    with pg.cursor() as cur:
+        for spec in EXPORTS.values():
+            cur.execute(f"TRUNCATE {spec['stage']}")
+    pg.commit()
+
+    exasol = connect_exasol(host=exasol_host, schema=SCHEMA)
+    try:
+        expected = {}
+        for name, spec in EXPORTS.items():
+            expected[name] = int(exasol.execute(f"SELECT COUNT(*) FROM ({spec['source']})").fetchval())
+            exasol.execute(build_export_statement(name))
+            logger.info("[reverse-etl] exported %d rows for %s", expected[name], name)
+    finally:
+        exasol.close()
+
+    try:
+        with pg.cursor() as cur:
+            for name, spec in EXPORTS.items():
+                cur.execute(f"SELECT COUNT(*) FROM {spec['stage']}")
+                staged = cur.fetchone()[0]
+                if staged == 0 or staged != expected[name]:
+                    raise RuntimeError(
+                        f"Stage check failed for {name}: Exasol has {expected[name]} rows, PostgreSQL staged {staged}. "
+                        "Serving tables left unchanged."
+                    )
+            for statement in UPSERT_SQL:
+                cur.execute(statement)
+        pg.commit()
+    except Exception:
+        pg.rollback()
+        raise
+
+    result: Dict[str, object] = {"status": "SYNC_COMPLETE", **expected}
+    logger.info("[reverse-etl] done: %s", result)
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Sync Module 3 metrics from Exasol to PostgreSQL.")
+    parser.add_argument("--setup", action="store_true", help="create the Exasol connection object, then exit")
+    parser.add_argument("--localhost", action="store_true", help="reach both databases on localhost")
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    host = "localhost" if args.localhost else None
+    if args.setup:
+        create_exasol_connection(host=host)
+    else:
+        sync_module3_to_postgres(exasol_host=host, postgres_host=host)
+
+
+if __name__ == "__main__":
+    main()

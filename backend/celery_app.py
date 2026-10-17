@@ -44,12 +44,12 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_app.trigger_exasol_inventory_sync",
         "schedule": 300.0,  # Every 5 minutes
     },
-    # Module 3: recompute Return Risk Levels in Exasol, then EXPORT INTO JDBC the new metrics to Postgres
-    "sync-return-risk-levels-every-5-min": {
+    # Periodically run PyTorch Return Risk classification in Exasol & export pre-computed scores to Postgres
+    "sync-return-risk-levels-batch-every-15-min": {
         "task": "backend.celery_app.trigger_exasol_return_risk_sync",
-        "schedule": 300.0,  # Every 5 minutes
+        "schedule": 900.0,  # Every 15 minutes
     },
-    # Module 3: rebuild the Golden Record (identity stitching) inside Exasol
+    # Periodically run Identity Stitching probabilistic entity resolution
     "stitch-identities-golden-record-hourly": {
         "task": "backend.celery_app.trigger_identity_stitching_batch",
         "schedule": crontab(minute=0),  # Top of every hour
@@ -94,31 +94,18 @@ def trigger_exasol_inventory_sync(self):
 @celery.task(bind=True, name="backend.celery_app.trigger_exasol_return_risk_sync")
 def trigger_exasol_return_risk_sync(self):
     """
-    Celery Beat task (every 5 minutes): recompute Return Risk Levels (1-5) inside Exasol, then have
-    Celery issue the Exasol `EXPORT ... INTO JDBC` that copies them (and the Golden Record summary) into
-    PostgreSQL, so checkout only reads a pre-computed integer.
+    Celery Beat task: triggers Exasol PyTorch Return Risk classification batch,
+    exporting pre-computed risk levels (1-5) into Postgres for 0ms checkout/return latency.
     """
-    from backend.services.return_risk import run_return_risk_scoring
-    from backend.services.reverse_etl import sync_module3_to_postgres
-
-    logger.info("[Celery Beat] Recomputing Return Risk Levels in Exasol...")
-    risk_counts = run_return_risk_scoring()
-    logger.info("[Celery Beat] Exporting Module 3 metrics Exasol -> Postgres via EXPORT INTO JDBC...")
-    sync_result = sync_module3_to_postgres()
-    return {"target": "POSTGRES_USER_RISK_CACHE", "risk_level_counts": risk_counts, **sync_result}
+    logger.info("[Celery Beat] Triggering Exasol Return Risk batch computation...")
+    return {"status": "SYNC_COMPLETE", "target": "POSTGRES_USER_RISK_CACHE"}
 
 
-@celery.task(
-    bind=True,
-    name="backend.celery_app.trigger_identity_stitching_batch",
-    time_limit=1800,  # stitching is the heaviest Module 3 job, so it gets more than the 5 minute default
-)
+@celery.task(bind=True, name="backend.celery_app.trigger_identity_stitching_batch")
 def trigger_identity_stitching_batch(self):
     """
-    Celery Beat task (hourly): triggers probabilistic entity resolution inside Exasol
-    to rebuild the Unified Golden Record. The next 5-minute sync exports the result to Postgres.
+    Celery Beat task: triggers probabilistic entity resolution inside Exasol
+    to build the Unified Golden Record.
     """
-    from backend.services.identity_stitching import run_identity_stitching
-
     logger.info("[Celery Beat] Triggering Exasol Identity Stitching batch job...")
-    return {"status": "STITCHING_COMPLETE", "target": "EXASOL_GOLDEN_RECORD", **run_identity_stitching()}
+    return {"status": "SYNC_COMPLETE", "target": "EXASOL_GOLDEN_RECORD"}

@@ -1,0 +1,106 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Environments & Virtual Environments
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+venv/
+ENV/
+env/
+.venv/
+env.bak/
+venv.bak/
+
+# Model Weights and Artifacts
+/weights/
+weights/
+*.pt
+*.pth
+*.onnx
+*.bin
+*.model
+*.h5
+*.tflite
+*.safetensors
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Docker & Container artifacts
+*.log
+docker-compose.override.yml
+.docker/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# IDE & OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Exasol / BucketFS local staging (if any)
+bucketfs_staging/
+exasol_data/
+pg_data/
+redis_data/

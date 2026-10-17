@@ -40,6 +40,9 @@ def test_health_check_endpoint(client: TestClient):
     assert data["databases"]["olap_exasol"] == "configured (privileged)"
 
 
+from unittest.mock import patch, MagicMock
+
+
 def test_zendesk_webhook_endpoint(client: TestClient):
     """Verifies that Zendesk webhook accepts payloads with HTTP 202 Accepted and returns task_id."""
     payload = {
@@ -51,12 +54,16 @@ def test_zendesk_webhook_endpoint(client: TestClient):
         "priority": "high",
         "status": "new",
     }
-    response = client.post("/api/v1/webhooks/zendesk", json=payload)
-    assert response.status_code == 202
-    data = response.json()
-    assert data["status"] == "queued"
-    assert data["ticket_id"] == "ZD-TEST-1001"
-    assert "task_id" in data
+    with patch("backend.celery_app.process_zendesk_ticket_task.delay") as mock_delay:
+        mock_task = MagicMock()
+        mock_task.id = "mock_task_123"
+        mock_delay.return_value = mock_task
+        response = client.post("/api/v1/webhooks/zendesk", json=payload)
+        assert response.status_code == 202
+        data = response.json()
+        assert data["status"] == "queued"
+        assert data["ticket_id"] == "ZD-TEST-1001"
+        assert data["task_id"] == "mock_task_123"
 
 
 class OCCLedgerSimulator:

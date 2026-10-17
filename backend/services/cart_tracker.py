@@ -151,3 +151,8 @@ class CartVelocityTracker:
 
 # Alias for flexible naming convention
 CartTracker = CartVelocityTracker
+
+
+def get_cart_tracker() -> CartVelocityTracker:
+    """FastAPI dependency yielding CartVelocityTracker instance."""
+    return CartVelocityTracker()

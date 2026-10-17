@@ -60,24 +60,28 @@ celery.conf.beat_schedule = {
 @celery.task(bind=True, name="backend.celery_app.process_zendesk_ticket_task")
 def process_zendesk_ticket_task(self, ticket_payload: dict):
     """
-    Asynchronous task for processing incoming Zendesk tickets.
+    Asynchronous Celery task for processing incoming Zendesk tickets.
 
     Workflow:
-    1. Ingests ticket text into Exasol staging table.
-    2. Runs Exasol PyTorch NLP sentiment UDF directly in-database.
-    3. Performs SQL JOIN between Churn Score (>= 0.85) and Customer Lifetime Value (Top 20%).
-    4. If VIP churn risk is confirmed, triggers alert to retention marketing APIs.
+    1. Extracts `user_id`, `ticket_id`, and `description` from the Zendesk payload.
+    2. Ingests ticket text into Exasol's `support_tickets` staging table via `pyexasol`.
+    3. Runs Exasol PyTorch NLP sentiment UDF (`predict_churn()`) directly in-database.
+    4. Evaluates the "Golden JOIN" between high churn score (>= 0.85) and Customer Lifetime Value (Top 20%).
+    5. Dispatches VIP retention interventions if customer is high-value and at high churn risk.
     """
+    from backend.tasks.zendesk import process_zendesk_ticket
+
     ticket_id = ticket_payload.get("ticket_id")
-    logger.info(f"[Celery] Processing Zendesk ticket {ticket_id} asynchronously.")
-    # In full implementation: execute Exasol UDF pipeline and join with LTV
-    return {
-        "status": "PROCESSED",
-        "ticket_id": ticket_id,
-        "sentiment_score": 0.88,
-        "is_vip_churn_risk": True,
-        "action_taken": "RETENTION_OFFER_DISPATCHED",
-    }
+    user_id = ticket_payload.get("user_id")
+    description = ticket_payload.get("description") or ticket_payload.get("ticket_text") or ""
+
+    logger.info(
+        f"[Celery] Processing Zendesk ticket '{ticket_id}' for user '{user_id}' "
+        f"(Text length: {len(description)} chars)"
+    )
+
+    result = process_zendesk_ticket(ticket_payload)
+    return result
 
 
 @celery.task(bind=True, name="backend.celery_app.trigger_exasol_inventory_sync")

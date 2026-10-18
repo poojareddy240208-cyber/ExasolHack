@@ -98,3 +98,30 @@ def test_sales_ledger_foreign_key_violation(db_session):
     with pytest.raises(IntegrityError):
         db_session.commit()
     db_session.rollback()
+
+
+def test_retention_campaign_audit_creation(db_session):
+    """Verifies that RetentionCampaignAudit records VIP saves with correct fields and UUID."""
+    from backend.models.sales import RetentionCampaignAudit
+
+    audit_id = uuid.uuid4()
+    audit = RetentionCampaignAudit(
+        audit_id=audit_id,
+        ticket_id="ZD-83921",
+        user_id="user_gold_vip_42",
+        churn_score=0.94,
+        ltv_tier="Top 1% VIP",
+        action_triggered="ACTION TRIGGERED: Concierge Replacement",
+        status="DISPATCHED",
+        created_at=datetime.now(timezone.utc),
+    )
+    db_session.add(audit)
+    db_session.commit()
+
+    saved_audit = db_session.get(RetentionCampaignAudit, audit_id)
+    assert saved_audit is not None
+    assert saved_audit.ticket_id == "ZD-83921"
+    assert saved_audit.churn_score == 0.94
+    assert saved_audit.ltv_tier == "Top 1% VIP"
+    assert "Concierge" in saved_audit.action_triggered
+

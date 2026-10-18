@@ -57,7 +57,7 @@ services:
     container_name: omnisync_exasol
     restart: unless-stopped
     privileged: true
-    stop_timeout: 120s
+    stop_grace_period: 120s
     environment:
       - EXA_PARAMS=-overrideSessionLimits -memsize=4096M
     ports:

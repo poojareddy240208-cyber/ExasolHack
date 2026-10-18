@@ -16,12 +16,9 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from backend.core.config import settings
 from backend.api.v1.router import api_v1_router
-from backend.schemas.checkout import CheckoutRequest, CheckoutResponse
-from backend.schemas.webhook import ZendeskTicketPayload, WebhookResponse
 
 # Configure structured logging
 logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")

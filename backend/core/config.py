@@ -5,7 +5,6 @@ Loads and validates environment variables using Pydantic v2 settings management.
 Enforces type safety and strict isolation of database connection credentials.
 """
 
-from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

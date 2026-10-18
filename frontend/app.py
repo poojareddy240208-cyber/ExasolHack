@@ -344,15 +344,18 @@ elif selected_nav == "🔄 Dynamic Return Friction":
 
     if "Level 1" in user_type:
         st.success(
-            "✅ **Policy Level 1 Applied (0ms latency)**: Seamless Free Return authorized. Prepaid label and instant store credit offered."
+            "✅ **Policy Level 1 Applied (0ms latency)**: Seamless Free Return authorized. "
+            "Prepaid label and instant store credit offered."
         )
     elif "Level 3" in user_type:
         st.warning(
-            "⚠️ **Policy Level 3 Applied (0ms latency)**: Return Friction Active: 'Keep this item and enjoy an instant 10% refund bonus credited to your wallet!'"
+            "⚠️ **Policy Level 3 Applied (0ms latency)**: Return Friction Active: "
+            "'Keep this item and enjoy an instant 10% refund bonus credited to your wallet!'"
         )
     else:
         st.error(
-            "🚫 **Policy Level 5 Applied (0ms latency)**: High-Risk Serial Returner: $5 Restocking fee applies upon drop-off. Cash-on-delivery disabled for future orders."
+            "🚫 **Policy Level 5 Applied (0ms latency)**: High-Risk Serial Returner: "
+            "$5 Restocking fee applies upon drop-off. Cash-on-delivery disabled for future orders."
         )
 
 
@@ -381,7 +384,10 @@ elif selected_nav == "🚨 VIP Churn Early Warning":
                 "Ticket ID": "ZD-83921",
                 "Customer": "Victoria Sterling",
                 "LTV Tier": "Top 1% ($42,100)",
-                "Sentiment Text Excerpt": "The stitching on this coat came undone on day two. This is totally unacceptable for a $2,400 garment...",
+                "Sentiment Text Excerpt": (
+                    "The stitching on this coat came undone on day two. "
+                    "This is totally unacceptable for a $2,400 garment..."
+                ),
                 "PyTorch Churn Score": 0.94,
                 "Status": "ACTION TRIGGERED: Concierge Replacement",
             },
@@ -389,7 +395,10 @@ elif selected_nav == "🚨 VIP Churn Early Warning":
                 "Ticket ID": "ZD-83944",
                 "Customer": "David Chang",
                 "LTV Tier": "Top 10% ($11,800)",
-                "Sentiment Text Excerpt": "Delayed shipment again. I'm moving all my corporate gifting to another vendor if this isn't resolved today.",
+                "Sentiment Text Excerpt": (
+                    "Delayed shipment again. I'm moving all my corporate gifting to another vendor "
+                    "if this isn't resolved today."
+                ),
                 "PyTorch Churn Score": 0.89,
                 "Status": "ACTION TRIGGERED: Priority Escalation",
             },

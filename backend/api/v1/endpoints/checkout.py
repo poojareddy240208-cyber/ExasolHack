@@ -21,7 +21,6 @@ Architectural Separation:
 import uuid
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -30,6 +29,7 @@ from backend.db.session import get_db
 from backend.models.inventory import Inventory
 from backend.models.sales import SalesLedger
 from backend.services.cart_tracker import CartVelocityTracker, get_cart_tracker
+from backend.services.risk_lookup import get_return_risk_level
 from backend.schemas.checkout import (
     CheckoutRequest,
     CheckoutResponse,
@@ -39,16 +39,6 @@ from backend.schemas.checkout import (
 logger = logging.getLogger("omnisync.checkout")
 
 router = APIRouter()
-
-# Pre-computed Return Risk Cache (populated from Exasol PyTorch batch jobs via Celery)
-# Level 1 (<10% return rate): Standard Free Returns
-# Level 3 (25-40% return rate): Friction "Keep it for 10% off"
-# Level 5 (>60% return rate): Penalty "$5 Restocking Fee warning, no COD"
-MOCK_PRECOMPUTED_RETURN_RISK: Dict[str, int] = {
-    "user_vip_001": 1,
-    "user_guest_892": 3,
-    "user_flagged_serial_returner": 5,
-}
 
 
 @router.post(
@@ -157,8 +147,9 @@ def process_checkout(
     except Exception as e:
         logger.warning(f"Could not remove session from Redis cart (broker offline or testing mode): {e}")
 
-    # Determine pre-computed return risk level (0ms latency lookup)
-    user_risk_level = MOCK_PRECOMPUTED_RETURN_RISK.get(effective_user_id, 1)
+    # Pre-computed return risk level: one primary-key read of the `user_risk_cache` table that Celery Beat
+    # keeps in sync from Exasol (Level 1 <10% returns ... Level 5 >60%). No analytics query runs here.
+    user_risk_level = get_return_risk_level(db, effective_user_id)
 
     new_version = item.version
     remaining_stock = item.stock

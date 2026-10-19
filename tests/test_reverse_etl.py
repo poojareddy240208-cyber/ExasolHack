@@ -90,3 +90,63 @@ def test_second_run_is_skipped_while_the_lock_is_held():
     ) as connect_exasol:
         assert sync_module3_to_postgres() == {"status": "SKIPPED"}
     connect_exasol.assert_not_called()
+
+
+def test_sync_inventory_buffer_to_postgres_success():
+    """Verifies that inventory sync queries Exasol and executes updates in Postgres via SQLAlchemy."""
+    from backend.services.reverse_etl import sync_inventory_buffer_to_postgres
+
+    mock_exasol = MagicMock()
+    mock_stmt = MagicMock()
+    mock_stmt.fetchall.return_value = [
+        ("SKU-4090-GPU", 15),
+        ("SKU-AIR-JORDAN", 8),
+    ]
+    mock_exasol.execute.return_value = mock_stmt
+
+    mock_session = MagicMock()
+
+    with patch("backend.services.reverse_etl.connect_exasol", return_value=mock_exasol):
+        result = sync_inventory_buffer_to_postgres(session=mock_session)
+
+    assert result["status"] == "SYNC_COMPLETE"
+    assert result["records_updated"] == 2
+    assert mock_exasol.execute.call_count == 1
+    query_executed = mock_exasol.execute.call_args[0][0]
+    assert "OMNISYNC_ANALYTICS.live_sku_telemetry" in query_executed
+    assert "virtual_safety_buffer" in query_executed
+
+    assert mock_session.execute.call_count == 2
+    mock_session.commit.assert_called_once()
+    mock_exasol.close.assert_called_once()
+
+
+def test_sync_inventory_buffer_to_postgres_rollback_on_error():
+    """Verifies that an exception during Postgres update triggers rollback."""
+    from backend.services.reverse_etl import sync_inventory_buffer_to_postgres
+
+    mock_exasol = MagicMock()
+    mock_stmt = MagicMock()
+    mock_stmt.fetchall.return_value = [("SKU-FAIL", 5)]
+    mock_exasol.execute.return_value = mock_stmt
+
+    mock_session = MagicMock()
+    mock_session.execute.side_effect = RuntimeError("DB connection dropped")
+
+    with patch("backend.services.reverse_etl.connect_exasol", return_value=mock_exasol):
+        with pytest.raises(RuntimeError, match="DB connection dropped"):
+            sync_inventory_buffer_to_postgres(session=mock_session)
+
+    mock_session.rollback.assert_called_once()
+
+
+def test_trigger_exasol_inventory_sync_celery_task():
+    """Verifies that Celery task trigger_exasol_inventory_sync invokes the sync function."""
+    from backend.celery_app import trigger_exasol_inventory_sync
+
+    with patch("backend.services.reverse_etl.sync_inventory_buffer_to_postgres") as mock_sync:
+        mock_sync.return_value = {"status": "SYNC_COMPLETE", "target": "POSTGRES_INVENTORY_BUFFER", "records_updated": 5}
+        result = trigger_exasol_inventory_sync()
+        assert result["status"] == "SYNC_COMPLETE"
+        mock_sync.assert_called_once()
+

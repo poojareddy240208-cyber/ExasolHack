@@ -23,13 +23,18 @@ driver entry in the Exasol settings.cfg - see the Exasol "Load data from Postgre
 
 import argparse
 import logging
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from backend.core.config import settings
+from backend.db.session import SessionLocal
 from backend.services.exasol_client import connect_exasol
 from backend.services.postgres_client import connect_postgres
 
 logger = logging.getLogger("omnisync.reverse_etl")
+
 
 SCHEMA = "OMNISYNC_ANALYTICS"
 EXASOL_CONNECTION = "POSTGRES_OMNISYNC"
@@ -217,6 +222,72 @@ def _run_sync(pg, exasol_host: Optional[str]) -> Dict[str, object]:
     result: Dict[str, object] = {"status": "SYNC_COMPLETE", **expected}
     logger.info("[reverse-etl] done: %s", result)
     return result
+
+
+def sync_inventory_buffer_to_postgres(
+    exasol_host: Optional[str] = None,
+    session: Optional[Session] = None,
+) -> Dict[str, Any]:
+    """
+    Synchronizes virtual safety stock buffer from Exasol to PostgreSQL via SQLAlchemy.
+
+    Queries OMNISYNC_ANALYTICS.live_sku_telemetry in Exasol, iterates through the results,
+    and executes parameterized updates on the PostgreSQL inventory table:
+        UPDATE inventory SET virtual_safety_buffer = :val WHERE item_id = :id
+    """
+    query = "SELECT item_id, virtual_safety_buffer FROM OMNISYNC_ANALYTICS.live_sku_telemetry"
+    logger.info("[reverse-etl] Fetching live SKU telemetry from Exasol...")
+
+    exasol = connect_exasol(host=exasol_host, schema=SCHEMA)
+    try:
+        stmt = exasol.execute(query)
+        if hasattr(stmt, "fetchall"):
+            rows = stmt.fetchall()
+        elif hasattr(exasol, "export_to_list"):
+            rows = exasol.export_to_list(query)
+        else:
+            rows = list(stmt)
+    finally:
+        exasol.close()
+
+    db: Session = session if session is not None else SessionLocal()
+    should_close = session is None
+
+    update_stmt = text(
+        "UPDATE inventory SET virtual_safety_buffer = :val WHERE item_id = :id"
+    )
+
+    updated_count = 0
+    try:
+        for row in rows:
+            if isinstance(row, dict):
+                item_id = row.get("item_id") or row.get("ITEM_ID")
+                val = row.get("virtual_safety_buffer") or row.get("VIRTUAL_SAFETY_BUFFER", 0)
+            else:
+                item_id = row[0]
+                val = row[1] if len(row) > 1 else 0
+
+            db.execute(update_stmt, {"val": int(val), "id": str(item_id)})
+            updated_count += 1
+        db.commit()
+        logger.info(f"[reverse-etl] Successfully synced virtual_safety_buffer for {updated_count} items to PostgreSQL.")
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"[reverse-etl] Failed to update PostgreSQL inventory buffer: {exc}")
+        raise
+    finally:
+        if should_close:
+            db.close()
+
+    return {
+        "status": "SYNC_COMPLETE",
+        "target": "POSTGRES_INVENTORY_BUFFER",
+        "records_updated": updated_count,
+    }
+
+
+# Backwards compatibility alias
+sync_inventory_buffers_to_postgres = sync_inventory_buffer_to_postgres
 
 
 def main() -> None:

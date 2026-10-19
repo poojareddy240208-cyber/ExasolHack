@@ -101,7 +101,7 @@ def test_health_check_endpoint(client: TestClient):
 
 
 def test_zendesk_webhook_endpoint(client: TestClient):
-    """Verifies that Zendesk webhook accepts payloads with HTTP 202 Accepted and returns task_id."""
+    """Verifies that Zendesk webhook accepts payloads with HTTP 202 Accepted and returns task_id via apply_async."""
     payload = {
         "ticket_id": "ZD-TEST-1001",
         "user_id": "user_vip_001",
@@ -111,16 +111,42 @@ def test_zendesk_webhook_endpoint(client: TestClient):
         "priority": "high",
         "status": "new",
     }
-    with patch("backend.celery_app.process_zendesk_ticket_task.delay") as mock_delay:
+    with patch("backend.celery_app.process_zendesk_ticket_task.apply_async") as mock_apply_async:
         mock_task = MagicMock()
         mock_task.id = "mock_task_123"
-        mock_delay.return_value = mock_task
+        mock_apply_async.return_value = mock_task
         response = client.post("/api/v1/webhooks/zendesk", json=payload)
         assert response.status_code == 202
         data = response.json()
         assert data["status"] == "queued"
         assert data["ticket_id"] == "ZD-TEST-1001"
         assert data["task_id"] == "mock_task_123"
+        mock_apply_async.assert_called_once()
+        assert mock_apply_async.call_args.kwargs.get("expires") == 10
+
+
+def test_zendesk_webhook_broker_outage_returns_503(client: TestClient):
+    """Verifies that Celery broker OperationalError returns HTTP 503 Service Unavailable."""
+    from kombu.exceptions import OperationalError
+
+    payload = {
+        "ticket_id": "ZD-TEST-1002",
+        "user_id": "user_vip_002",
+        "email": "vip.outage@example.com",
+        "subject": "Urgent failure",
+        "description": "Critical complaint text",
+        "priority": "urgent",
+        "status": "new",
+    }
+    with patch(
+        "backend.celery_app.process_zendesk_ticket_task.apply_async",
+        side_effect=OperationalError("Redis broker connection timeout"),
+    ):
+        response = client.post("/api/v1/webhooks/zendesk", json=payload)
+        assert response.status_code == 503
+        data = response.json()
+        assert "broker unavailable" in data["detail"].lower()
+
 
 
 # ------------------------------------------------------------------------------

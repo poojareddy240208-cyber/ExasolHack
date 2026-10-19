@@ -197,11 +197,14 @@ celery.tasks["backend.celery_app.process_zendesk_ticket_task"] = process_zendesk
 @celery.task(bind=True, name="backend.celery_app.trigger_exasol_inventory_sync")
 def trigger_exasol_inventory_sync(self):
     """
-    Celery Beat task: triggers Exasol EXPORT INTO JDBC to push updated Virtual Safety Stock
-    into PostgreSQL catalog ledger without external data movement.
+    Celery Beat task: queries Exasol live_sku_telemetry and updates
+    PostgreSQL inventory table virtual_safety_buffer via SQLAlchemy.
     """
-    logger.info("[Celery Beat] Triggering Exasol predictive inventory EXPORT INTO JDBC...")
-    return {"status": "SYNC_COMPLETE", "target": "POSTGRES_INVENTORY_BUFFER"}
+    from backend.services.reverse_etl import sync_inventory_buffer_to_postgres
+
+    logger.info("[Celery Beat] Triggering Exasol predictive inventory buffer sync...")
+    return sync_inventory_buffer_to_postgres()
+
 
 
 @celery.task(bind=True, name="backend.celery_app.trigger_exasol_return_risk_sync")

@@ -28,28 +28,32 @@ DEFAULT_CHURN_THRESHOLD = 0.85
 DEFAULT_LTV_PERCENTILE = 0.80  # Top 20%
 
 
-def get_golden_retention_join_sql(
+def get_vip_churn_radar_sql(
     churn_threshold: float = DEFAULT_CHURN_THRESHOLD,
     ltv_percentile: float = DEFAULT_LTV_PERCENTILE,
 ) -> str:
     """
     Builds the Exasol SQL Golden JOIN query.
 
-    Calculates customer LTV from purchase history, identifies the Top 20% percentile cutoff,
-    scores support ticket sentiment via PREDICT_CHURN_SCORE UDF, and joins on user/customer ID.
+    Calculates customer LTV from GOLDEN_CUSTOMERS.TOTAL_SPEND_USD (rebuilt from RAW_PURCHASES),
+    identifies the Top 20% percentile cutoff, scores support ticket sentiment via
+    PREDICT_CHURN_SCORE UDF as a standard scalar function in the SELECT list,
+    and resolves tickets (including anonymous tickets) by joining STAGING_ZENDESK_TICKETS
+    to IDENTITY_NODES (matching email or device context), which joins to GOLDEN_CUSTOMERS.
     """
     return f"""
     WITH customer_ltv AS (
+        -- Evaluates customer lifetime value using GOLDEN_CUSTOMERS.TOTAL_SPEND_USD
+        -- (stitched across all linked accounts and guest devices from RAW_PURCHASES)
         SELECT 
-            USER_ID,
-            SUM(QUANTITY * UNIT_PRICE) AS total_spend,
-            PERCENT_RANK() OVER (ORDER BY SUM(QUANTITY * UNIT_PRICE)) AS ltv_percent_rank
-        FROM OMNISYNC_ANALYTICS.RAW_PURCHASES
-        GROUP BY USER_ID
+            GOLDEN_CUSTOMER_ID,
+            TOTAL_SPEND_USD AS total_spend,
+            PERCENT_RANK() OVER (ORDER BY TOTAL_SPEND_USD) AS ltv_percent_rank
+        FROM OMNISYNC_ANALYTICS.GOLDEN_CUSTOMERS
     ),
     vip_customers AS (
         SELECT 
-            USER_ID,
+            GOLDEN_CUSTOMER_ID,
             total_spend,
             ltv_percent_rank,
             CASE 
@@ -67,19 +71,14 @@ def get_golden_retention_join_sql(
             t.USER_ID,
             t.CLEANED_TEXT,
             t.CREATED_AT,
-            s.churn_score
-        FROM OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS t,
-        LATERAL (
-            SELECT churn_score 
-            FROM (EXECUTE SCRIPT OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE(t.CLEANED_TEXT))
-        ) s
-        WHERE s.churn_score >= {churn_threshold}
+            OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE(t.CLEANED_TEXT) AS CHURN_SCORE
+        FROM OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS t
     )
-    SELECT 
+    SELECT DISTINCT
         st.TICKET_ID,
-        st.USER_ID,
+        COALESCE(st.USER_ID, gc.PRIMARY_EMAIL, gc.GOLDEN_CUSTOMER_ID) AS USER_ID,
         st.CLEANED_TEXT AS sentiment_excerpt,
-        st.churn_score,
+        st.CHURN_SCORE AS churn_score,
         vc.total_spend,
         vc.ltv_percent_rank,
         vc.ltv_tier,
@@ -89,9 +88,29 @@ def get_golden_retention_join_sql(
             ELSE 'ACTION TRIGGERED: VIP Win-Back Offer'
         END AS action_triggered
     FROM scored_tickets st
-    INNER JOIN vip_customers vc ON st.USER_ID = vc.USER_ID
-    ORDER BY vc.total_spend DESC, st.churn_score DESC
+    JOIN OMNISYNC_ANALYTICS.IDENTITY_NODES n 
+        ON (
+            st.USER_ID = n.SOURCE_ID
+            OR LOWER(TRIM(st.USER_ID)) = LOWER(TRIM(n.EMAIL))
+            OR n.NODE_ID = st.USER_ID
+            OR n.NODE_ID = 'DEVICE:' || st.USER_ID
+            OR n.NODE_ID = 'ZENDESK:' || LOWER(TRIM(st.USER_ID))
+            OR n.NODE_ID = 'SHOPIFY:' || st.USER_ID
+        )
+    LEFT JOIN OMNISYNC_ANALYTICS.GOLDEN_CUSTOMER_MEMBERS m 
+        ON n.NODE_ID = m.NODE_ID
+    JOIN OMNISYNC_ANALYTICS.GOLDEN_CUSTOMERS gc 
+        ON (gc.GOLDEN_CUSTOMER_ID = m.GOLDEN_CUSTOMER_ID OR gc.PRIMARY_EMAIL = n.EMAIL)
+    JOIN vip_customers vc 
+        ON gc.GOLDEN_CUSTOMER_ID = vc.GOLDEN_CUSTOMER_ID
+    WHERE st.CHURN_SCORE >= {churn_threshold}
+    ORDER BY vc.total_spend DESC, st.CHURN_SCORE DESC
     """
+
+
+# Alias for backward compatibility
+get_golden_retention_join_sql = get_vip_churn_radar_sql
+
 
 
 def run_retention_vip_join(

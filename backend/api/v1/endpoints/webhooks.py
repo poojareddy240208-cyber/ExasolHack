@@ -6,9 +6,10 @@ Payloads are immediately validated via Pydantic v2 and dropped into Celery to av
 API timeouts and decouple fast-ingest from in-database NLP analytics in Exasol.
 """
 
-import uuid
 import logging
-from fastapi import APIRouter, Header, status
+from typing import Optional
+from fastapi import APIRouter, Header, HTTPException, status
+from kombu.exceptions import OperationalError
 from backend.schemas.webhook import ZendeskTicketPayload, WebhookResponse
 
 logger = logging.getLogger("omnisync.webhooks")
@@ -27,35 +28,44 @@ router = APIRouter()
         "to compute Churn Score (threshold >= 0.85) and join with Top 20% LTV VIP customers."
     ),
 )
-async def handle_zendesk_webhook(
+def handle_zendesk_webhook(
     payload: ZendeskTicketPayload,
-    x_zendesk_signature: str = Header(
+    x_zendesk_signature: Optional[str] = Header(
         None, description="HMAC verification signature provided by Zendesk webhook settings"
     ),
 ):
     """
-    Asynchronously accepts Zendesk support ticket payload.
-    Avoids API timeouts by pushing directly to Redis / Celery task queue.
+    Synchronously accepts Zendesk support ticket payload in a worker thread.
+    Avoids API timeouts and event-loop blocking by pushing directly to Redis / Celery task queue with a tight timeout.
     """
     logger.info(f"Received Zendesk ticket webhook: {payload.ticket_id} for user {payload.email or payload.user_id}")
 
-    # Generate synthetic task ID for asynchronous processing placeholder
-    # In live Celery mode: task = process_zendesk_ticket_task.delay(payload.model_dump())
-    synthetic_task_id = f"task_{uuid.uuid4().hex[:12]}"
-
     try:
-        # Import lazily to permit lightweight unit testing without active Redis connection
         from backend.celery_app import process_zendesk_ticket_task
 
-        task = process_zendesk_ticket_task.delay(payload.model_dump(mode="json"))
+        payload_dict = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload.dict()
+        task = process_zendesk_ticket_task.apply_async(
+            args=[payload_dict],
+            expires=10,
+        )
         active_task_id = task.id
-    except Exception as e:
-        logger.warning(f"Celery dispatch deferred (broker offline or testing mode): {e}")
-        active_task_id = synthetic_task_id
+    except (OperationalError, ConnectionError, TimeoutError, OSError) as exc:
+        logger.error(f"Celery broker unreachable during webhook dispatch: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Message broker unavailable. Unable to enqueue support ticket.",
+        )
+    except Exception as exc:
+        logger.error(f"Unexpected error enqueuing Zendesk ticket {payload.ticket_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Service unavailable: {str(exc)}",
+        )
 
     return WebhookResponse(
         status="queued",
         task_id=active_task_id,
         ticket_id=payload.ticket_id,
-        message="Zendesk ticket successfully enqueued for Exasol PyTorch NLP sentiment analysis.",
+        message="Payload dispatched to Celery worker for asynchronous NLP sentiment and churn analysis.",
     )
+

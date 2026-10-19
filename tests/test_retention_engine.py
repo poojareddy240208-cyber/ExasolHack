@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from backend.services.retention_engine import (
     get_golden_retention_join_sql,
+    get_vip_churn_radar_sql,
     run_retention_vip_join,
 )
 
@@ -20,6 +21,22 @@ def test_golden_retention_join_sql_contains_thresholds():
     assert "STAGING_ZENDESK_TICKETS" in sql
     assert "RAW_PURCHASES" in sql
     assert "PERCENT_RANK()" in sql
+    assert "GOLDEN_CUSTOMERS" in sql
+    assert "IDENTITY_NODES" in sql
+    assert "TOTAL_SPEND_USD" in sql
+    assert "LATERAL" not in sql
+    assert "EXECUTE SCRIPT" not in sql
+
+
+def test_get_vip_churn_radar_sql_scalar_and_identity_stitching():
+    """Verifies that get_vip_churn_radar_sql calls scalar UDF in SELECT and joins identity nodes."""
+    sql = get_vip_churn_radar_sql(churn_threshold=0.85, ltv_percentile=0.80)
+    assert "OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE(t.CLEANED_TEXT)" in sql
+    assert "LATERAL" not in sql
+    assert "EXECUTE SCRIPT" not in sql
+    assert "IDENTITY_NODES" in sql
+    assert "GOLDEN_CUSTOMERS" in sql
+    assert "TOTAL_SPEND_USD" in sql
 
 
 def test_golden_retention_join_sql_custom_thresholds():
@@ -27,6 +44,7 @@ def test_golden_retention_join_sql_custom_thresholds():
     sql = get_golden_retention_join_sql(churn_threshold=0.90, ltv_percentile=0.95)
     assert "0.9" in sql
     assert "0.95" in sql
+
 
 
 @patch("backend.services.retention_engine.connect_exasol")

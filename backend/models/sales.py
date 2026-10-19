@@ -26,7 +26,6 @@ class SalesLedger(Base):
     __tablename__ = "sales_ledger"
     __table_args__ = {"extend_existing": True}
 
-
     transaction_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, doc="Unique transaction UUID"
     )
@@ -68,19 +67,14 @@ class RetentionCampaignAudit(Base):
     __tablename__ = "retention_campaign_audit"
     __table_args__ = {"extend_existing": True}
 
-
     audit_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, doc="Unique campaign audit UUID"
     )
-    ticket_id: Mapped[str] = mapped_column(
-        String(64), nullable=False, index=True, doc="Zendesk support ticket ID"
-    )
+    ticket_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True, doc="Zendesk support ticket ID")
     user_id: Mapped[str] = mapped_column(
         String(128), nullable=False, index=True, doc="Target customer ID or Golden Customer ID"
     )
-    churn_score: Mapped[float] = mapped_column(
-        Float, nullable=False, doc="PyTorch sentiment churn score (>= 0.85)"
-    )
+    churn_score: Mapped[float] = mapped_column(Float, nullable=False, doc="PyTorch sentiment churn score (>= 0.85)")
     ltv_tier: Mapped[str] = mapped_column(
         String(64), nullable=False, default="VIP_TOP_20_PERCENT", doc="Customer LTV tier ranking"
     )
@@ -103,4 +97,3 @@ class RetentionCampaignAudit(Base):
             f"<RetentionCampaignAudit(audit_id={self.audit_id}, ticket_id='{self.ticket_id}', "
             f"user_id='{self.user_id}', churn_score={self.churn_score}, action='{self.action_triggered}')>"
         )
-

@@ -124,4 +124,3 @@ def test_retention_campaign_audit_creation(db_session):
     assert saved_audit.churn_score == 0.94
     assert saved_audit.ltv_tier == "Top 1% VIP"
     assert "Concierge" in saved_audit.action_triggered
-

@@ -174,7 +174,10 @@ class TestExasolChurnUDF:
         sql = get_churn_udf_sql()
 
         # Must be scalar Python3 script with specific signature from PRD
-        assert "CREATE OR REPLACE PYTHON3 SCALAR SCRIPT OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE(cleaned_text VARCHAR(4000))" in sql
+        assert (
+            "CREATE OR REPLACE PYTHON3 SCALAR SCRIPT OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE(cleaned_text VARCHAR(4000))"
+            in sql
+        )
         assert "EMITS (churn_score DOUBLE)" in sql
 
     def test_get_churn_udf_sql_uses_global_worker_cache(self):

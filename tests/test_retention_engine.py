@@ -11,7 +11,6 @@ from backend.services.retention_engine import (
 )
 
 
-
 def test_golden_retention_join_sql_contains_thresholds():
     """Verifies that the Golden JOIN SQL correctly incorporates churn and LTV percentile thresholds."""
     sql = get_golden_retention_join_sql(churn_threshold=0.85, ltv_percentile=0.80)

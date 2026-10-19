@@ -114,9 +114,7 @@ def run_retention_vip_join(
         List of identified VIP churn risk records.
     """
     sql = get_golden_retention_join_sql(churn_threshold, ltv_percentile)
-    logger.info(
-        f"[retention] Executing Exasol Golden JOIN (Churn >= {churn_threshold}, LTV >= {ltv_percentile})..."
-    )
+    logger.info(f"[retention] Executing Exasol Golden JOIN (Churn >= {churn_threshold}, LTV >= {ltv_percentile})...")
 
     conn = connect_exasol(host=host, schema="OMNISYNC_ANALYTICS")
     try:

@@ -28,7 +28,7 @@ def get_churn_udf_sql(bucketfs_model_path: Optional[str] = None) -> str:
     model_path = bucketfs_model_path or DEFAULT_BUCKETFS_MODEL_PATH
 
     sql = f"""CREATE OR REPLACE PYTHON3 SCALAR SCRIPT OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE(cleaned_text VARCHAR(4000))
-EMITS (churn_score DOUBLE) AS
+RETURNS DOUBLE AS
 
 import os
 import sys
@@ -80,7 +80,7 @@ def _init_sentiment_model():
         _MODEL.to(_DEVICE)
         _MODEL.eval()
     except Exception as exc:
-        # Keep _MODEL as None; run() will safely emit 0.0 fallback
+        # Keep _MODEL as None; run() will safely return 0.0 fallback
         sys.stderr.write("Warning: Failed to load Transformer from BucketFS: " + str(exc) + "\\n")
 
 
@@ -92,27 +92,24 @@ def run(ctx):
     - Label 0: NEGATIVE
     - Label 1: POSITIVE
     Dissatisfied / negative sentiment directly correlates with customer churn intent.
-    Softmax probability of NEGATIVE (label 0) is emitted as churn_score (0.0 to 1.0).
+    Softmax probability of NEGATIVE (label 0) is returned as the churn score (0.0 to 1.0).
     \"\"\"
     raw_val = ctx.cleaned_text
 
     # Guard against null, empty, or whitespace-only inputs
     if raw_val is None:
-        ctx.emit(0.0)
-        return
+        return 0.0
 
     text = str(raw_val).strip()
     if not text:
-        ctx.emit(0.0)
-        return
+        return 0.0
 
     try:
         _init_sentiment_model()
 
         if _MODEL is None or _TOKENIZER is None:
             # Fallback if model files are inaccessible
-            ctx.emit(0.0)
-            return
+            return 0.0
 
         import torch
 
@@ -134,10 +131,10 @@ def run(ctx):
 
             # Bound score between 0.0 and 1.0
             churn_score = max(0.0, min(1.0, neg_prob))
-            ctx.emit(churn_score)
+            return churn_score
     except Exception as exc:
-        # Invariant: Never abort the analytics query on bad row text; emit 0.0 fallback
-        ctx.emit(0.0)
+        # Invariant: Never abort the analytics query on bad row text; return 0.0 fallback
+        return 0.0
 """
     return sql
 

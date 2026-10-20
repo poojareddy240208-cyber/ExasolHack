@@ -72,20 +72,22 @@ def run(ctx):
 -- Demonstration & Virtual Safety Stock Buffer Calculation
 -- =============================================================================
 
--- 1. Create staging table simulating live telemetry streamed from Redis & Postgres
-CREATE OR REPLACE TABLE live_sku_telemetry (
+-- 1. Telemetry table (normally created by sql/exasol/001_module3_schema.sql and refreshed by Celery from
+--    PostgreSQL stock and Redis cart velocity). IF NOT EXISTS: re-running this script never wipes live data.
+CREATE TABLE IF NOT EXISTS live_sku_telemetry (
     item_id VARCHAR(64),
     current_physical_stock DECIMAL(9,0),
     cart_velocity_5m DECIMAL(9,0),
     telemetry_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Insert sample SKU traffic for demonstration
-INSERT INTO live_sku_telemetry VALUES 
-    ('SKU-4090-GPU', 10, 85, CURRENT_TIMESTAMP),
-    ('SKU-HERMES-BAG', 3, 14, CURRENT_TIMESTAMP),
-    ('SKU-AIR-JORDAN', 50, 28, CURRENT_TIMESTAMP),
-    ('SKU-SMARTPHONE-PRO', 0, 42, CURRENT_TIMESTAMP);
+-- Sample rows for a manual demo only (left commented so a re-run cannot overwrite real telemetry):
+-- INSERT INTO live_sku_telemetry VALUES 
+--     ('SKU-4090-GPU', 10, 85, CURRENT_TIMESTAMP),
+--     ('SKU-HERMES-BAG', 3, 14, CURRENT_TIMESTAMP),
+--     ('SKU-AIR-JORDAN', 50, 28, CURRENT_TIMESTAMP),
+--     ('SKU-SMARTPHONE-PRO', 0, 42, CURRENT_TIMESTAMP);
+--
 
 -- 2. Query computing 15-minute predicted surge and Virtual Safety Stock Buffer
 -- Formula: Buffer = GREATEST(0, predict_demand_15m(...) - current_physical_stock + cart_velocity)
@@ -96,14 +98,14 @@ SELECT
     predict_demand_15m(
         cart_velocity_5m, 
         CAST(TO_CHAR(telemetry_timestamp, 'HH24') AS DOUBLE), 
-        CAST(TO_CHAR(telemetry_timestamp, 'ID') AS DOUBLE)
+        CAST(TO_CHAR(telemetry_timestamp, 'D') AS DOUBLE)
     ) AS predicted_demand_15m,
     GREATEST(
         0, 
         predict_demand_15m(
             cart_velocity_5m, 
             CAST(TO_CHAR(telemetry_timestamp, 'HH24') AS DOUBLE), 
-            CAST(TO_CHAR(telemetry_timestamp, 'ID') AS DOUBLE)
+            CAST(TO_CHAR(telemetry_timestamp, 'D') AS DOUBLE)
         ) - current_physical_stock + cart_velocity_5m
     ) AS virtual_safety_buffer
 FROM live_sku_telemetry;
@@ -122,7 +124,7 @@ EXPORT (
             predict_demand_15m(
                 cart_velocity_5m, 
                 CAST(TO_CHAR(telemetry_timestamp, 'HH24') AS DOUBLE), 
-                CAST(TO_CHAR(telemetry_timestamp, 'ID') AS DOUBLE)
+                CAST(TO_CHAR(telemetry_timestamp, 'D') AS DOUBLE)
             ) - current_physical_stock + cart_velocity_5m
         ) AS virtual_safety_buffer
     FROM live_sku_telemetry

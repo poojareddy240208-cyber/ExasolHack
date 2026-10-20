@@ -23,13 +23,19 @@ driver entry in the Exasol settings.cfg - see the Exasol "Load data from Postgre
 
 import argparse
 import logging
-from typing import Dict, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from backend.core.config import settings
+from backend.db.session import SessionLocal
 from backend.services.exasol_client import connect_exasol
 from backend.services.postgres_client import connect_postgres
 
 logger = logging.getLogger("omnisync.reverse_etl")
+
 
 SCHEMA = "OMNISYNC_ANALYTICS"
 EXASOL_CONNECTION = "POSTGRES_OMNISYNC"
@@ -217,6 +223,122 @@ def _run_sync(pg, exasol_host: Optional[str]) -> Dict[str, object]:
     result: Dict[str, object] = {"status": "SYNC_COMPLETE", **expected}
     logger.info("[reverse-etl] done: %s", result)
     return result
+
+
+TELEMETRY_TABLE = (SCHEMA, "LIVE_SKU_TELEMETRY")
+TELEMETRY_COLUMNS = ["ITEM_ID", "CURRENT_PHYSICAL_STOCK", "CART_VELOCITY_5M", "TELEMETRY_TIMESTAMP"]
+
+# PRD formula, evaluated inside Exasol by the LightGBM UDF created in backend/db/exasol/01_inventory_predict_udf.sql:
+#   Buffer = MAX(0, Predicted_Demand_15m - Current_Physical_Stock + Active_Carts_5m)
+# The buffer is a computed value, not a stored column: LIVE_SKU_TELEMETRY only holds the model inputs.
+INVENTORY_BUFFER_QUERY = """
+SELECT ITEM_ID,
+       GREATEST(0,
+                OMNISYNC_ANALYTICS.PREDICT_DEMAND_15M(
+                    CAST(CART_VELOCITY_5M AS DOUBLE),
+                    CAST(TO_CHAR(TELEMETRY_TIMESTAMP, 'HH24') AS DOUBLE),
+                    CAST(TO_CHAR(TELEMETRY_TIMESTAMP, 'D') AS DOUBLE))
+                - CURRENT_PHYSICAL_STOCK + CART_VELOCITY_5M) AS VIRTUAL_SAFETY_BUFFER
+FROM OMNISYNC_ANALYTICS.LIVE_SKU_TELEMETRY
+"""
+
+
+def refresh_inventory_telemetry(
+    exasol_host: Optional[str] = None,
+    session: Optional[Session] = None,
+    cart_tracker: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """
+    Load the model inputs for every SKU into Exasol: current physical stock (PostgreSQL) and the number of
+    active carts in the last 5 minutes (Redis). Celery triggers this just before the buffer sync.
+    """
+    from backend.services.cart_tracker import get_cart_tracker
+
+    db: Session = session if session is not None else SessionLocal()
+    try:
+        stock_rows = db.execute(text("SELECT item_id, stock FROM inventory")).fetchall()
+    finally:
+        if session is None:
+            db.close()
+
+    tracker = cart_tracker if cart_tracker is not None else get_cart_tracker()
+    now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+    telemetry = []
+    for item_id, stock in stock_rows:
+        try:
+            velocity = int(tracker.get_cart_velocity(item_id))
+        except Exception as exc:  # Redis unavailable: treat as no carts rather than failing the whole sync
+            logger.warning("[reverse-etl] cart velocity unavailable for %s, using 0: %s", item_id, exc)
+            velocity = 0
+        telemetry.append((str(item_id), int(stock), velocity, now))
+
+    exasol = connect_exasol(host=exasol_host, schema=SCHEMA)
+    try:
+        exasol.execute("DELETE FROM OMNISYNC_ANALYTICS.LIVE_SKU_TELEMETRY")
+        if telemetry:
+            exasol.import_from_iterable(telemetry, TELEMETRY_TABLE, import_params={"columns": TELEMETRY_COLUMNS})
+    finally:
+        exasol.close()
+    logger.info("[reverse-etl] refreshed %d SKU telemetry rows in Exasol", len(telemetry))
+    return {"telemetry_rows": len(telemetry)}
+
+
+def sync_inventory_buffer_to_postgres(
+    exasol_host: Optional[str] = None,
+    session: Optional[Session] = None,
+) -> Dict[str, Any]:
+    """
+    Compute the virtual safety stock buffer in Exasol and write it to PostgreSQL.
+
+    Runs INVENTORY_BUFFER_QUERY in Exasol, then for each SKU executes the parameterized update:
+        UPDATE inventory SET virtual_safety_buffer = :val WHERE item_id = :id
+    Checkout reads that column and rejects an order when quantity > stock - virtual_safety_buffer.
+    """
+    logger.info("[reverse-etl] Computing virtual safety buffers in Exasol...")
+
+    exasol = connect_exasol(host=exasol_host, schema=SCHEMA)
+    try:
+        rows = exasol.execute(INVENTORY_BUFFER_QUERY).fetchall()
+    finally:
+        exasol.close()
+
+    db: Session = session if session is not None else SessionLocal()
+    update_stmt = text("UPDATE inventory SET virtual_safety_buffer = :val WHERE item_id = :id")
+
+    updated_count = 0
+    unknown_items = []
+    try:
+        for row in rows:
+            item_id, val = str(row[0]), int(row[1] or 0)
+            result = db.execute(update_stmt, {"val": val, "id": item_id})
+            if result.rowcount:
+                updated_count += result.rowcount
+            else:
+                unknown_items.append(item_id)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"[reverse-etl] Failed to update PostgreSQL inventory buffer: {exc}")
+        raise
+    finally:
+        if session is None:
+            db.close()
+
+    if unknown_items:
+        logger.warning(
+            "[reverse-etl] %d telemetry SKUs are not in PostgreSQL inventory: %s", len(unknown_items), unknown_items
+        )
+    logger.info("[reverse-etl] synced virtual_safety_buffer for %d inventory rows", updated_count)
+    return {
+        "status": "SYNC_COMPLETE",
+        "target": "POSTGRES_INVENTORY_BUFFER",
+        "records_updated": updated_count,
+        "unknown_items": len(unknown_items),
+    }
+
+
+# Backwards compatibility alias
+sync_inventory_buffers_to_postgres = sync_inventory_buffer_to_postgres
 
 
 def main() -> None:

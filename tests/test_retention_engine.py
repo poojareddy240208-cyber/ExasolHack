@@ -46,7 +46,6 @@ def test_golden_retention_join_sql_custom_thresholds():
     assert "0.95" in sql
 
 
-
 @patch("backend.services.retention_engine.connect_exasol")
 def test_run_retention_vip_join_mock_execution(mock_connect):
     """Verifies that run_retention_vip_join parses results from Exasol export."""
@@ -77,3 +76,64 @@ def test_run_retention_vip_join_mock_execution(mock_connect):
     assert rec["ltv_tier"] == "Top 1% VIP"
     assert "Concierge" in rec["action_triggered"]
     mock_conn.close.assert_called_once()
+
+
+def _position(sql, token):
+    assert token in sql, f"{token} missing from the Golden JOIN"
+    return sql.index(token)
+
+
+def test_ticket_resolves_through_identity_nodes_members_and_golden_customers():
+    """STAGING_ZENDESK_TICKETS -> IDENTITY_NODES -> GOLDEN_CUSTOMER_MEMBERS -> GOLDEN_CUSTOMERS, in that order."""
+    sql = get_vip_churn_radar_sql()
+    path = [
+        "FROM OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS",
+        "OMNISYNC_ANALYTICS.IDENTITY_NODES",
+        "OMNISYNC_ANALYTICS.GOLDEN_CUSTOMER_MEMBERS",
+        "JOIN OMNISYNC_ANALYTICS.GOLDEN_CUSTOMERS gc",
+    ]
+    positions = [_position(sql, token) for token in path]
+    assert positions == sorted(positions)
+
+
+def test_golden_join_has_no_bypass_around_the_members_table():
+    sql = get_vip_churn_radar_sql()
+    assert "PRIMARY_EMAIL" not in sql  # the old "OR gc.PRIMARY_EMAIL = n.EMAIL" shortcut skipped the members table
+    join_block = sql.split("ticket_nodes AS")[1].split("vip_tickets AS")[0]
+    code_only = "\n".join(line for line in join_block.splitlines() if not line.strip().startswith("--"))
+    assert " OR " not in code_only  # one plain equality per rule, so Exasol can hash-join each
+
+
+def test_ltv_comes_only_from_golden_customers_total_spend():
+    sql = get_vip_churn_radar_sql()
+    assert "TOTAL_SPEND_USD AS total_spend" in sql
+    assert "FROM OMNISYNC_ANALYTICS.RAW_PURCHASES" not in sql
+    assert "SUM(QUANTITY" not in sql
+
+
+def test_udf_is_called_in_the_select_list_and_only_for_vip_tickets():
+    sql = get_vip_churn_radar_sql()
+    assert "OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE(t.CLEANED_TEXT) AS CHURN_SCORE" in sql
+    # the model is applied after the VIP filter, so it never scores tickets that cannot trigger an action
+    assert _position(sql, "vip_tickets AS") < _position(sql, "PREDICT_CHURN_SCORE(")
+
+
+def test_ticket_with_no_identity_is_excluded_explicitly():
+    assert "WHERE USER_ID IS NOT NULL" in get_vip_churn_radar_sql()
+
+
+@patch("backend.services.retention_engine.connect_exasol")
+def test_existing_campaigns_are_not_duplicated(mock_connect):
+    def row(ticket):
+        return [ticket, "CUST-GOLDEN-1", "text", 0.95, 1000.0, 0.99, "Top 1% VIP", "ACTION TRIGGERED: X"]
+
+    mock_connect.return_value.export_to_list.return_value = [row("ZD-1"), row("ZD-2")]
+    session = MagicMock()
+    session.query.return_value.filter.return_value.all.return_value = [("ZD-1",)]  # ZD-1 already has a campaign
+
+    records = run_retention_vip_join(db_session=session)
+
+    assert len(records) == 2  # both tickets are still reported
+    audited = [call.args[0].ticket_id for call in session.add.call_args_list]
+    assert audited == ["ZD-2"]  # but only the new one gets a campaign
+    session.commit.assert_called_once()

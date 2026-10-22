@@ -43,20 +43,20 @@ def get_vip_churn_radar_sql(
     """
     return f"""
     WITH customer_ltv AS (
-        -- Evaluates customer lifetime value using GOLDEN_CUSTOMERS.TOTAL_SPEND_USD
-        -- (stitched across all linked accounts and guest devices from RAW_PURCHASES)
-        SELECT 
+        -- LTV is read strictly from GOLDEN_CUSTOMERS.TOTAL_SPEND_USD: spend is already stitched across every
+        -- linked account and guest device (rebuilt from RAW_PURCHASES net of refunds by the stitching job).
+        SELECT
             GOLDEN_CUSTOMER_ID,
             TOTAL_SPEND_USD AS total_spend,
             PERCENT_RANK() OVER (ORDER BY TOTAL_SPEND_USD) AS ltv_percent_rank
         FROM OMNISYNC_ANALYTICS.GOLDEN_CUSTOMERS
     ),
     vip_customers AS (
-        SELECT 
+        SELECT
             GOLDEN_CUSTOMER_ID,
             total_spend,
             ltv_percent_rank,
-            CASE 
+            CASE
                 WHEN ltv_percent_rank >= 0.99 THEN 'Top 1% VIP'
                 WHEN ltv_percent_rank >= 0.95 THEN 'Top 5% VIP'
                 WHEN ltv_percent_rank >= 0.90 THEN 'Top 10% VIP'
@@ -65,52 +65,80 @@ def get_vip_churn_radar_sql(
         FROM customer_ltv
         WHERE ltv_percent_rank >= {ltv_percentile}
     ),
-    scored_tickets AS (
-        SELECT 
+    ticket_keys AS (
+        -- A ticket with no user id and no email has no identity to resolve, so it is left out here.
+        -- Email-only tickets carry the email in USER_ID; it is normalised like IDENTITY_NODES.EMAIL
+        -- (lower-case, "+tag" removed).
+        SELECT
+            TICKET_ID,
+            USER_ID,
+            CLEANED_TEXT,
+            REGEXP_REPLACE(LOWER(TRIM(USER_ID)), '\\+[^@]*@', '@') AS EMAIL_KEY
+        FROM OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS
+        WHERE USER_ID IS NOT NULL
+    ),
+    ticket_nodes AS (
+        -- STAGING_ZENDESK_TICKETS -> IDENTITY_NODES, one plain equality per matching rule so Exasol can
+        -- hash-join each of them (a single OR condition would force a nested loop).
+        SELECT k.TICKET_ID, n.NODE_ID
+        FROM ticket_keys k JOIN OMNISYNC_ANALYTICS.IDENTITY_NODES n ON n.SOURCE_ID = k.USER_ID
+        UNION
+        SELECT k.TICKET_ID, n.NODE_ID
+        FROM ticket_keys k JOIN OMNISYNC_ANALYTICS.IDENTITY_NODES n ON n.EMAIL = k.EMAIL_KEY
+        UNION
+        SELECT k.TICKET_ID, n.NODE_ID
+        FROM ticket_keys k
+        JOIN OMNISYNC_ANALYTICS.IDENTITY_NODES n ON n.NODE_ID = 'ZENDESK:' || LOWER(TRIM(k.USER_ID))
+    ),
+    vip_tickets AS (
+        -- IDENTITY_NODES -> GOLDEN_CUSTOMER_MEMBERS -> GOLDEN_CUSTOMERS, then keep only VIP customers, so the
+        -- (expensive) churn model below only scores tickets that could trigger a retention action.
+        SELECT DISTINCT
+            k.TICKET_ID,
+            k.CLEANED_TEXT,
+            gc.GOLDEN_CUSTOMER_ID,
+            vc.total_spend,
+            vc.ltv_percent_rank,
+            vc.ltv_tier
+        FROM ticket_keys k
+        JOIN ticket_nodes tn ON tn.TICKET_ID = k.TICKET_ID
+        JOIN OMNISYNC_ANALYTICS.GOLDEN_CUSTOMER_MEMBERS m ON m.NODE_ID = tn.NODE_ID
+        JOIN OMNISYNC_ANALYTICS.GOLDEN_CUSTOMERS gc ON gc.GOLDEN_CUSTOMER_ID = m.GOLDEN_CUSTOMER_ID
+        JOIN vip_customers vc ON vc.GOLDEN_CUSTOMER_ID = gc.GOLDEN_CUSTOMER_ID
+    ),
+    scored AS (
+        -- PREDICT_CHURN_SCORE is a scalar UDF (RETURNS DOUBLE), called like any function in the SELECT list.
+        SELECT
             t.TICKET_ID,
-            t.USER_ID,
             t.CLEANED_TEXT,
-            t.CREATED_AT,
+            t.GOLDEN_CUSTOMER_ID,
+            t.total_spend,
+            t.ltv_percent_rank,
+            t.ltv_tier,
             OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE(t.CLEANED_TEXT) AS CHURN_SCORE
-        FROM OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS t
+        FROM vip_tickets t
     )
-    SELECT DISTINCT
-        st.TICKET_ID,
-        COALESCE(st.USER_ID, gc.PRIMARY_EMAIL, gc.GOLDEN_CUSTOMER_ID) AS USER_ID,
-        st.CLEANED_TEXT AS sentiment_excerpt,
-        st.CHURN_SCORE AS churn_score,
-        vc.total_spend,
-        vc.ltv_percent_rank,
-        vc.ltv_tier,
-        CASE 
-            WHEN vc.ltv_percent_rank >= 0.95 THEN 'ACTION TRIGGERED: Concierge Replacement'
-            WHEN vc.ltv_percent_rank >= 0.90 THEN 'ACTION TRIGGERED: Priority Escalation'
+    SELECT
+        TICKET_ID,
+        GOLDEN_CUSTOMER_ID AS USER_ID,
+        CLEANED_TEXT AS sentiment_excerpt,
+        CHURN_SCORE AS churn_score,
+        total_spend,
+        ltv_percent_rank,
+        ltv_tier,
+        CASE
+            WHEN ltv_percent_rank >= 0.95 THEN 'ACTION TRIGGERED: Concierge Replacement'
+            WHEN ltv_percent_rank >= 0.90 THEN 'ACTION TRIGGERED: Priority Escalation'
             ELSE 'ACTION TRIGGERED: VIP Win-Back Offer'
         END AS action_triggered
-    FROM scored_tickets st
-    JOIN OMNISYNC_ANALYTICS.IDENTITY_NODES n 
-        ON (
-            st.USER_ID = n.SOURCE_ID
-            OR LOWER(TRIM(st.USER_ID)) = LOWER(TRIM(n.EMAIL))
-            OR n.NODE_ID = st.USER_ID
-            OR n.NODE_ID = 'DEVICE:' || st.USER_ID
-            OR n.NODE_ID = 'ZENDESK:' || LOWER(TRIM(st.USER_ID))
-            OR n.NODE_ID = 'SHOPIFY:' || st.USER_ID
-        )
-    LEFT JOIN OMNISYNC_ANALYTICS.GOLDEN_CUSTOMER_MEMBERS m 
-        ON n.NODE_ID = m.NODE_ID
-    JOIN OMNISYNC_ANALYTICS.GOLDEN_CUSTOMERS gc 
-        ON (gc.GOLDEN_CUSTOMER_ID = m.GOLDEN_CUSTOMER_ID OR gc.PRIMARY_EMAIL = n.EMAIL)
-    JOIN vip_customers vc 
-        ON gc.GOLDEN_CUSTOMER_ID = vc.GOLDEN_CUSTOMER_ID
-    WHERE st.CHURN_SCORE >= {churn_threshold}
-    ORDER BY vc.total_spend DESC, st.CHURN_SCORE DESC
+    FROM scored
+    WHERE CHURN_SCORE >= {churn_threshold}
+    ORDER BY total_spend DESC, CHURN_SCORE DESC
     """
 
 
 # Alias for backward compatibility
 get_golden_retention_join_sql = get_vip_churn_radar_sql
-
 
 
 def run_retention_vip_join(
@@ -154,22 +182,34 @@ def run_retention_vip_join(
 
         logger.info(f"[retention] Golden JOIN identified {len(records)} VIP churn risks.")
 
-        # If PostgreSQL session is provided, audit the interventions
+        # If a PostgreSQL session is provided, audit each NEW intervention. The join re-evaluates every staged
+        # ticket on each run, so tickets that already have a campaign are skipped (no duplicate campaigns).
         if db_session and records:
-            for rec in records:
-                audit = RetentionCampaignAudit(
-                    audit_id=uuid.uuid4(),
-                    ticket_id=rec["ticket_id"],
-                    user_id=rec["user_id"],
-                    churn_score=rec["churn_score"],
-                    ltv_tier=rec["ltv_tier"],
-                    action_triggered=rec["action_triggered"],
-                    status="DISPATCHED",
-                    created_at=datetime.now(timezone.utc),
+            ticket_ids = [rec["ticket_id"] for rec in records]
+            already_audited = {
+                row[0]
+                for row in db_session.query(RetentionCampaignAudit.ticket_id)
+                .filter(RetentionCampaignAudit.ticket_id.in_(ticket_ids))
+                .all()
+            }
+            new_records = [rec for rec in records if rec["ticket_id"] not in already_audited]
+            for rec in new_records:
+                db_session.add(
+                    RetentionCampaignAudit(
+                        audit_id=uuid.uuid4(),
+                        ticket_id=rec["ticket_id"],
+                        user_id=rec["user_id"],
+                        churn_score=rec["churn_score"],
+                        ltv_tier=rec["ltv_tier"],
+                        action_triggered=rec["action_triggered"],
+                        status="DISPATCHED",
+                        created_at=datetime.now(timezone.utc),
+                    )
                 )
-                db_session.add(audit)
             db_session.commit()
-            logger.info(f"[retention] Successfully logged {len(records)} VIP campaigns to RetentionCampaignAudit.")
+            logger.info(
+                f"[retention] Logged {len(new_records)} new VIP campaigns ({len(already_audited)} already audited)."
+            )
 
         return records
     except Exception as exc:

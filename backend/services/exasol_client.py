@@ -16,7 +16,10 @@ from backend.core.config import settings
 
 
 def connect_exasol(
-    host: Optional[str] = None, schema: Optional[str] = None, autocommit: bool = True
+    host: Optional[str] = None,
+    schema: Optional[str] = None,
+    autocommit: bool = True,
+    connection_timeout: Optional[int] = None,
 ) -> pyexasol.ExaConnection:
     """
     Open a connection to Exasol using the project settings.
@@ -25,7 +28,9 @@ def connect_exasol(
         host: override the configured host (use "localhost" when running outside docker-compose).
         schema: schema to open after connecting.
         autocommit: pass False to run several statements as one transaction.
+        connection_timeout: seconds to wait for the connection (pyexasol's default applies when omitted).
     """
+    options = {"connection_timeout": connection_timeout} if connection_timeout is not None else {}
     # The Exasol docker image ships a self-signed certificate, so certificate checks are
     # disabled for this local development connection only.
     return pyexasol.connect(
@@ -36,6 +41,7 @@ def connect_exasol(
         autocommit=autocommit,
         encryption=True,
         websocket_sslopt={"cert_reqs": ssl.CERT_NONE},
+        **options,
     )
 
 

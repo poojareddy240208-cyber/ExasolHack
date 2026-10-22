@@ -94,6 +94,21 @@ CREATE TABLE IF NOT EXISTS user_risk_cache (
 
 CREATE INDEX IF NOT EXISTS idx_user_risk_cache_golden ON user_risk_cache (golden_customer_id);
 
+-- Members of each golden customer (the stitched Shopify accounts, guest devices and Zendesk requesters), with
+-- the match confidence. Replaced as a whole on every sync. Read by the Golden Record dashboard pages.
+CREATE TABLE IF NOT EXISTS golden_customer_members (
+    golden_customer_id TEXT NOT NULL,
+    node_id            TEXT NOT NULL,                   -- 'SHOPIFY:user_000123' | 'DEVICE:dev_9f2c' | 'ZENDESK:a@b.com'
+    node_type          TEXT NOT NULL,                   -- SHOPIFY | DEVICE | ZENDESK
+    source_id          TEXT NOT NULL,                   -- the id as the source system knows it
+    confidence         NUMERIC(5, 4) NOT NULL,
+    synced_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (golden_customer_id, node_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_golden_members_source ON golden_customer_members (source_id);
+CREATE INDEX IF NOT EXISTS idx_golden_customers_email ON golden_customers (lower(primary_email));
+
 -- -----------------------------------------------------------------------------
 -- 3. Stage tables (target of Exasol EXPORT ... INTO JDBC; truncated every sync)
 --    No constraints on purpose: EXPORT must never fail half-way on a bad row.
@@ -116,4 +131,12 @@ CREATE TABLE IF NOT EXISTS user_risk_cache_stage (
     purchases_6m       INTEGER,
     returns_6m         INTEGER,
     computed_at        TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS golden_customer_members_stage (
+    golden_customer_id TEXT,
+    node_id            TEXT,
+    node_type          TEXT,
+    source_id          TEXT,
+    confidence         NUMERIC(5, 4)
 );

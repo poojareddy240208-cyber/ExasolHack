@@ -166,3 +166,14 @@ CREATE TABLE IF NOT EXISTS USER_RETURN_RISK (
     RETURNS_6M         DECIMAL(9, 0) NOT NULL,
     COMPUTED_AT        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- -----------------------------------------------------------------------------
+-- Predictive inventory inputs (refreshed every 5 minutes by Celery from PostgreSQL stock and Redis cart
+-- velocity). The virtual safety buffer is computed from this table by the LightGBM UDF, never stored here.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS LIVE_SKU_TELEMETRY (
+    ITEM_ID                VARCHAR(64) NOT NULL,
+    CURRENT_PHYSICAL_STOCK DECIMAL(9, 0) NOT NULL,
+    CART_VELOCITY_5M       DECIMAL(9, 0) NOT NULL,
+    TELEMETRY_TIMESTAMP    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

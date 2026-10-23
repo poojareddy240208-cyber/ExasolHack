@@ -26,7 +26,10 @@ class ReturnPolicy:
     customer_message: str
     restocking_fee_usd: float
     cash_on_delivery_allowed: bool
-    keep_it_discount_pct: int  # "Keep it for X% off" offer shown instead of a return; 0 = no offer
+    keep_it_discount_pct: (
+        int  # "Keep it for X% off" offer shown instead of a return; 0 = no offer
+    )
+    human_review_required: bool = False
 
 
 RETURN_POLICIES: Dict[int, ReturnPolicy] = {
@@ -39,6 +42,7 @@ RETURN_POLICIES: Dict[int, ReturnPolicy] = {
         0.0,
         True,
         0,
+        False,
     ),
     2: ReturnPolicy(
         2,
@@ -49,6 +53,7 @@ RETURN_POLICIES: Dict[int, ReturnPolicy] = {
         0.0,
         True,
         0,
+        False,
     ),
     3: ReturnPolicy(
         3,
@@ -59,6 +64,7 @@ RETURN_POLICIES: Dict[int, ReturnPolicy] = {
         0.0,
         True,
         10,
+        False,
     ),
     4: ReturnPolicy(
         4,
@@ -69,16 +75,18 @@ RETURN_POLICIES: Dict[int, ReturnPolicy] = {
         0.0,
         True,
         10,
+        False,
     ),
     5: ReturnPolicy(
         5,
         "Penalty Guard",
         "> 60%",
         True,
-        "A $5 restocking fee applies to returns, and Cash on Delivery is not available.",
+        "A $5 restocking fee applies to returns, and Cash on Delivery is not available. Account flagged for human review.",
         5.0,
         False,
         0,
+        True,
     ),
 }
 

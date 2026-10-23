@@ -16,14 +16,19 @@ from backend.schemas.dashboard import (
     GoldenCustomerSummary,
     GoldenMember,
     GoldenStatsResponse,
+    IdentityInvestigationResponse,
 )
-from backend.services.dashboard_db import fetch_all, fetch_one, ltv_tier, percent_rank_for_spend
+from backend.services.dashboard_db import (
+    fetch_all,
+    fetch_one,
+    ltv_tier,
+    percent_rank_for_spend,
+)
+from backend.services.identity_stitching import generate_identity_investigation
 
 router = APIRouter()
 
-_SUMMARY_COLUMNS = (
-    "gc.golden_customer_id, gc.primary_email, gc.member_count, gc.total_spend_usd, gc.first_seen_at, gc.last_seen_at"
-)
+_SUMMARY_COLUMNS = "gc.golden_customer_id, gc.primary_email, gc.member_count, gc.total_spend_usd, gc.first_seen_at, gc.last_seen_at"
 
 
 def _summary(db: Session, row) -> GoldenCustomerSummary:
@@ -66,7 +71,12 @@ def golden_stats(db: Session = Depends(get_db)):
     summary="Search golden customers by email, golden id, Shopify user id, device id or Zendesk email",
 )
 def search_golden_customers(
-    q: str = Query(..., min_length=2, max_length=255, description="Email (partial ok) or an exact id"),
+    q: str = Query(
+        ...,
+        min_length=2,
+        max_length=255,
+        description="Email (partial ok) or an exact id",
+    ),
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
 ):
@@ -78,10 +88,31 @@ def search_golden_customers(
         "WHERE lower(gc.primary_email) LIKE :like OR gc.golden_customer_id = :term "
         "OR m.source_id = :term OR lower(m.source_id) = :lowered "
         "ORDER BY gc.total_spend_usd DESC LIMIT :limit",
-        {"like": f"%{term.lower()}%", "term": term, "lowered": term.lower(), "limit": limit},
+        {
+            "like": f"%{term.lower()}%",
+            "term": term,
+            "lowered": term.lower(),
+            "limit": limit,
+        },
     )
     results = [_summary(db, row) for row in rows]
     return GoldenCustomerSearchResponse(query=term, count=len(results), results=results)
+
+
+@router.get(
+    "/{id}/investigation",
+    response_model=IdentityInvestigationResponse,
+    summary="Explainable AI (XAI) Identity Detective investigation evidence and confidence",
+    responses={404: {"description": "Identity investigation not found"}},
+)
+def get_identity_investigation(id: str, db: Session = Depends(get_db)):
+    result = generate_identity_investigation(id, db)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Identity investigation not found for '{id}'.",
+        )
+    return IdentityInvestigationResponse(**result)
 
 
 @router.get(
@@ -97,7 +128,10 @@ def get_golden_customer(golden_customer_id: str, db: Session = Depends(get_db)):
         {"id": golden_customer_id},
     )
     if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Golden customer '{golden_customer_id}' not found.")
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=f"Golden customer '{golden_customer_id}' not found.",
+        )
 
     summary = _summary(db, row)
     member_rows = fetch_all(
@@ -106,7 +140,12 @@ def get_golden_customer(golden_customer_id: str, db: Session = Depends(get_db)):
         "WHERE golden_customer_id = :id ORDER BY confidence DESC, node_id",
         {"id": golden_customer_id},
     )
-    members = [GoldenMember(node_id=r[0], node_type=r[1], source_id=r[2], confidence=float(r[3])) for r in member_rows]
+    members = [
+        GoldenMember(
+            node_id=r[0], node_type=r[1], source_id=r[2], confidence=float(r[3])
+        )
+        for r in member_rows
+    ]
 
     # The risk level is per golden customer, so any Shopify account or guest device of the customer carries it.
     risk = None

@@ -420,7 +420,117 @@ def seed_xai_demo_data() -> None:
                 )
             logger.info("Seeded identity_evidence for DEMO-EVE-001.")
 
+        # -------------------------------------------------------------
+        # 3. NLP Demo Tickets: Fit Issue & The Ruined Event
+        # -------------------------------------------------------------
+        try:
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS support_tickets (
+                    ticket_id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    requester_email TEXT,
+                    subject TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    priority TEXT NOT NULL DEFAULT 'normal',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            db.commit()
+        except Exception:
+            pass
+
+        ticket_1_id = "ZD-DEMO-FIT-001"
+        existing_t1 = (
+            db.query(RetentionCampaignAudit)
+            .filter(RetentionCampaignAudit.ticket_id == ticket_1_id)
+            .first()
+        )
+        if not existing_t1:
+            db.add(
+                RetentionCampaignAudit(
+                    audit_id=uuid.uuid4(),
+                    ticket_id=ticket_1_id,
+                    user_id="DEMO-EVE-001",
+                    churn_score=0.30,
+                    ltv_tier="Top 1% VIP",
+                    action_triggered="AUTO_RETURN_LABEL",
+                    status="PENDING_REVIEW",
+                    created_at=now - timedelta(hours=3),
+                    urgency="MEDIUM",
+                    root_cause="PRODUCT_PREFERENCE",
+                    xai_explanation="Product preference issue detected. Customer dissatisfied with item style, color, or variant. Automated prepaid return label recommended.",
+                )
+            )
+
+        ticket_2_id = "ZD-DEMO-WEDDING-002"
+        existing_t2 = (
+            db.query(RetentionCampaignAudit)
+            .filter(RetentionCampaignAudit.ticket_id == ticket_2_id)
+            .first()
+        )
+        if not existing_t2:
+            db.add(
+                RetentionCampaignAudit(
+                    audit_id=uuid.uuid4(),
+                    ticket_id=ticket_2_id,
+                    user_id="DEMO-EVE-001",
+                    churn_score=0.99,
+                    ltv_tier="Top 1% VIP",
+                    action_triggered="ESCALATE_HUMAN_CONCIERGE_AND_OVERNIGHT_REPLACEMENT",
+                    status="PENDING_REVIEW",
+                    created_at=now - timedelta(hours=1),
+                    urgency="CRITICAL",
+                    root_cause="FULFILLMENT_FAILURE",
+                    xai_explanation="Critical urgency detected due to fulfillment failure. Standard discount insufficient. Human concierge escalation required.",
+                )
+            )
+
+        try:
+            t1_support = db.execute(
+                text("SELECT ticket_id FROM support_tickets WHERE ticket_id = :id"),
+                {"id": ticket_1_id},
+            ).fetchone()
+            if not t1_support:
+                db.execute(
+                    text("""
+                        INSERT INTO support_tickets (ticket_id, user_id, requester_email, subject, description, priority, created_at)
+                        VALUES (:tid, :uid, :email, :subj, :desc, :pri, :created)
+                    """),
+                    {
+                        "tid": ticket_1_id,
+                        "uid": "DEMO-EVE-001",
+                        "email": "eve.vip@example.com",
+                        "subj": "Fit and Color Mismatch Return",
+                        "desc": "I hate the color of this shirt, it looks nothing like the picture. I want to return it.",
+                        "pri": "normal",
+                        "created": now - timedelta(hours=3),
+                    },
+                )
+            t2_support = db.execute(
+                text("SELECT ticket_id FROM support_tickets WHERE ticket_id = :id"),
+                {"id": ticket_2_id},
+            ).fetchone()
+            if not t2_support:
+                db.execute(
+                    text("""
+                        INSERT INTO support_tickets (ticket_id, user_id, requester_email, subject, description, priority, created_at)
+                        VALUES (:tid, :uid, :email, :subj, :desc, :pri, :created)
+                    """),
+                    {
+                        "tid": ticket_2_id,
+                        "uid": "DEMO-EVE-001",
+                        "email": "eve.vip@example.com",
+                        "subj": "Wedding Dress Not Shipped - Emergency",
+                        "desc": "I ordered this dress for my wedding tomorrow and it hasn't shipped! Cancel my account immediately, you ruined everything!",
+                        "pri": "urgent",
+                        "created": now - timedelta(hours=1),
+                    },
+                )
+        except Exception:
+            pass
+
         db.commit()
+        logger.info("Seeded demo NLP tickets for Top 1% VIP DEMO-EVE-001.")
     finally:
         db.close()
 

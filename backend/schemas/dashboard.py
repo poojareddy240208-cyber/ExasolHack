@@ -197,6 +197,23 @@ class ChurnAlert(BaseModel):
     action_triggered: str
     status: str
     created_at: datetime
+    xai_explanation: Optional[str] = Field(
+        None,
+        description="Explainable AI rationale for context-aware retention recommendation",
+    )
+    urgency: Optional[str] = Field(
+        None, description="NLP urgency level: LOW, MEDIUM, HIGH, CRITICAL"
+    )
+    root_cause: Optional[str] = Field(
+        None,
+        description="NLP root cause: FULFILLMENT_FAILURE, PRODUCT_PREFERENCE, BILLING_ERROR",
+    )
+    approved_by: Optional[str] = Field(
+        None, description="Operator or user who approved the retention action"
+    )
+    executed_at: Optional[datetime] = Field(
+        None, description="When the action was executed/approved"
+    )
 
 
 class ChurnAlertsResponse(BaseModel):
@@ -204,6 +221,20 @@ class ChurnAlertsResponse(BaseModel):
     count_in_window: int
     total_alerts: int
     alerts: List[ChurnAlert]
+
+
+class ChurnActionApproveRequest(BaseModel):
+    approved_by: str = Field(
+        ..., description="Operator or user approving the retention action"
+    )
+
+
+class ChurnActionApproveResponse(BaseModel):
+    ticket_id: str
+    status: str
+    message: str
+    approved_by: Optional[str] = None
+    executed_at: Optional[datetime] = None
 
 
 # --------------------------------------------------------------------------------------------------------------

@@ -141,6 +141,177 @@ def get_vip_churn_radar_sql(
 get_golden_retention_join_sql = get_vip_churn_radar_sql
 
 
+def parse_nlp_udf_output(raw_output: Any) -> Dict[str, Any]:
+    """
+    Parses structured NLP output from Exasol PREDICT_CHURN_SCORE UDF (JSON VARCHAR(2000)).
+    Extracts:
+    - sentiment (Float)
+    - urgency (String: 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')
+    - root_cause (String: 'FULFILLMENT_FAILURE', 'PRODUCT_PREFERENCE', 'BILLING_ERROR')
+    """
+    import json
+
+    sentiment = 0.0
+    urgency = "LOW"
+    root_cause = "PRODUCT_PREFERENCE"
+
+    if isinstance(raw_output, (int, float)):
+        sentiment = float(raw_output)
+        urgency = (
+            "CRITICAL"
+            if sentiment >= 0.9
+            else (
+                "HIGH"
+                if sentiment >= 0.75
+                else ("MEDIUM" if sentiment >= 0.5 else "LOW")
+            )
+        )
+        root_cause = (
+            "FULFILLMENT_FAILURE" if sentiment >= 0.85 else "PRODUCT_PREFERENCE"
+        )
+    elif isinstance(raw_output, dict):
+        sentiment = float(
+            raw_output.get("sentiment", raw_output.get("churn_score", 0.0))
+        )
+        raw_urg = raw_output.get("urgency", "MEDIUM")
+        if isinstance(raw_urg, (int, float)):
+            urgency = (
+                "CRITICAL"
+                if raw_urg >= 0.9
+                else (
+                    "HIGH"
+                    if raw_urg >= 0.75
+                    else ("MEDIUM" if raw_urg >= 0.5 else "LOW")
+                )
+            )
+        else:
+            urgency = str(raw_urg).upper()
+        root_cause = str(raw_output.get("root_cause", "PRODUCT_PREFERENCE")).upper()
+    elif isinstance(raw_output, str):
+        try:
+            parsed = json.loads(raw_output)
+            if isinstance(parsed, dict):
+                sentiment = float(
+                    parsed.get("sentiment", parsed.get("churn_score", 0.0))
+                )
+                raw_urg = parsed.get("urgency", "MEDIUM")
+                if isinstance(raw_urg, (int, float)):
+                    urgency = (
+                        "CRITICAL"
+                        if raw_urg >= 0.9
+                        else (
+                            "HIGH"
+                            if raw_urg >= 0.75
+                            else ("MEDIUM" if raw_urg >= 0.5 else "LOW")
+                        )
+                    )
+                else:
+                    urgency = str(raw_urg).upper()
+                root_cause = str(parsed.get("root_cause", "PRODUCT_PREFERENCE")).upper()
+            else:
+                sentiment = float(parsed)
+                urgency = "CRITICAL" if sentiment >= 0.9 else "MEDIUM"
+                root_cause = (
+                    "FULFILLMENT_FAILURE" if sentiment >= 0.85 else "PRODUCT_PREFERENCE"
+                )
+        except Exception:
+            try:
+                sentiment = float(raw_output)
+                urgency = "CRITICAL" if sentiment >= 0.9 else "MEDIUM"
+                root_cause = (
+                    "FULFILLMENT_FAILURE" if sentiment >= 0.85 else "PRODUCT_PREFERENCE"
+                )
+            except Exception:
+                sentiment = 0.0
+                urgency = "LOW"
+                root_cause = "PRODUCT_PREFERENCE"
+
+    valid_urgencies = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+    if urgency not in valid_urgencies:
+        urgency = (
+            "CRITICAL"
+            if sentiment >= 0.9
+            else (
+                "HIGH"
+                if sentiment >= 0.75
+                else ("MEDIUM" if sentiment >= 0.5 else "LOW")
+            )
+        )
+
+    valid_causes = {"FULFILLMENT_FAILURE", "PRODUCT_PREFERENCE", "BILLING_ERROR"}
+    if root_cause not in valid_causes:
+        if any(kw in root_cause for kw in ["FULFILL", "SHIP", "DELIV", "SERVICE"]):
+            root_cause = "FULFILLMENT_FAILURE"
+        elif any(kw in root_cause for kw in ["BILL", "CHARGE", "PRICE", "REFUND"]):
+            root_cause = "BILLING_ERROR"
+        else:
+            root_cause = "PRODUCT_PREFERENCE"
+
+    return {
+        "sentiment": round(sentiment, 4),
+        "urgency": urgency,
+        "root_cause": root_cause,
+    }
+
+
+def evaluate_retention_action(
+    root_cause: str,
+    urgency: str,
+    sentiment: float = 0.0,
+    ltv_tier: str = "",
+) -> Dict[str, str]:
+    """
+    Context-Aware Action Engine for VIP retention alerts.
+    Implements rule engine:
+    - If root_cause == 'PRODUCT_PREFERENCE' -> AUTO_RETURN_LABEL
+    - If root_cause == 'FULFILLMENT_FAILURE' and urgency == 'CRITICAL' -> ESCALATE_HUMAN_CONCIERGE_AND_OVERNIGHT_REPLACEMENT
+    - If root_cause == 'BILLING_ERROR' -> AUTO_REFUND_AND_10_PCT_APOLOGY
+    - Includes xai_explanation rationale string.
+    """
+    rc = (root_cause or "").upper().strip()
+    urg = (urgency or "").upper().strip()
+
+    if rc == "PRODUCT_PREFERENCE":
+        action = "AUTO_RETURN_LABEL"
+        explanation = (
+            "Product preference issue detected. Customer dissatisfied with item style, color, or variant. "
+            "Automated prepaid return label recommended."
+        )
+    elif rc == "FULFILLMENT_FAILURE" and urg == "CRITICAL":
+        action = "ESCALATE_HUMAN_CONCIERGE_AND_OVERNIGHT_REPLACEMENT"
+        explanation = (
+            "Critical urgency detected due to fulfillment failure. "
+            "Standard discount insufficient. Human concierge escalation required."
+        )
+    elif rc == "FULFILLMENT_FAILURE":
+        action = "EXPEDITED_REPLACEMENT_AND_TRACKING_DISPATCH"
+        explanation = (
+            f"Fulfillment delay detected with {urg or 'HIGH'} urgency. "
+            "Expedited replacement dispatch and carrier priority escalation recommended."
+        )
+    elif rc == "BILLING_ERROR":
+        action = "AUTO_REFUND_AND_10_PCT_APOLOGY"
+        explanation = (
+            "Billing discrepancy or charge error detected. "
+            "Automated full refund and 10% apology coupon recommended."
+        )
+    else:
+        if urg == "CRITICAL":
+            action = "ESCALATE_HUMAN_CONCIERGE_AND_OVERNIGHT_REPLACEMENT"
+            explanation = "Critical urgency detected. Immediate human concierge escalation required."
+        else:
+            action = "VIP_CONCIERGE_OUTREACH"
+            explanation = (
+                f"Elevated churn risk ({round(sentiment, 2)}) for {ltv_tier or 'VIP customer'}. "
+                "Dedicated customer success outreach recommended."
+            )
+
+    return {
+        "recommended_action": action,
+        "xai_explanation": explanation,
+    }
+
+
 def run_retention_vip_join(
     host: Optional[str] = None,
     churn_threshold: float = DEFAULT_CHURN_THRESHOLD,
@@ -158,29 +329,57 @@ def run_retention_vip_join(
         db_session: Optional SQLAlchemy session for PostgreSQL audit logging.
 
     Returns:
-        List of identified VIP churn risk records.
+        List of identified VIP churn risk records with parsed NLP intelligence and recommended actions.
     """
     sql = get_golden_retention_join_sql(churn_threshold, ltv_percentile)
-    logger.info(f"[retention] Executing Exasol Golden JOIN (Churn >= {churn_threshold}, LTV >= {ltv_percentile})...")
+    logger.info(
+        f"[retention] Executing Exasol Golden JOIN (Churn >= {churn_threshold}, LTV >= {ltv_percentile})..."
+    )
 
     conn = connect_exasol(host=host, schema="OMNISYNC_ANALYTICS")
     try:
         results = conn.export_to_list(sql)
         records: List[Dict[str, Any]] = []
         for row in results:
+            raw_output = row[3]
+            nlp_data = parse_nlp_udf_output(raw_output)
+            sentiment = nlp_data["sentiment"]
+            urgency = nlp_data["urgency"]
+            root_cause = nlp_data["root_cause"]
+            ltv_tier = str(row[6])
+
+            action_eval = evaluate_retention_action(
+                root_cause=root_cause,
+                urgency=urgency,
+                sentiment=sentiment,
+                ltv_tier=ltv_tier,
+            )
+            recommended_action = action_eval["recommended_action"]
+            xai_explanation = action_eval["xai_explanation"]
+            action_triggered = (
+                str(row[7]) if len(row) > 7 and row[7] else recommended_action
+            )
+
             record = {
                 "ticket_id": str(row[0]),
                 "user_id": str(row[1]),
                 "sentiment_excerpt": str(row[2])[:200] if row[2] else "",
-                "churn_score": float(row[3]),
+                "churn_score": sentiment,
+                "sentiment": sentiment,
+                "urgency": urgency,
+                "root_cause": root_cause,
                 "total_spend": float(row[4]),
                 "ltv_percent_rank": float(row[5]),
-                "ltv_tier": str(row[6]),
-                "action_triggered": str(row[7]),
+                "ltv_tier": ltv_tier,
+                "recommended_action": recommended_action,
+                "action_triggered": action_triggered,
+                "xai_explanation": xai_explanation,
             }
             records.append(record)
 
-        logger.info(f"[retention] Golden JOIN identified {len(records)} VIP churn risks.")
+        logger.info(
+            f"[retention] Golden JOIN identified {len(records)} VIP churn risks."
+        )
 
         # If a PostgreSQL session is provided, audit each NEW intervention. The join re-evaluates every staged
         # ticket on each run, so tickets that already have a campaign are skipped (no duplicate campaigns).
@@ -192,18 +391,25 @@ def run_retention_vip_join(
                 .filter(RetentionCampaignAudit.ticket_id.in_(ticket_ids))
                 .all()
             }
-            new_records = [rec for rec in records if rec["ticket_id"] not in already_audited]
+            new_records = [
+                rec for rec in records if rec["ticket_id"] not in already_audited
+            ]
             for rec in new_records:
                 db_session.add(
                     RetentionCampaignAudit(
                         audit_id=uuid.uuid4(),
                         ticket_id=rec["ticket_id"],
                         user_id=rec["user_id"],
-                        churn_score=rec["churn_score"],
+                        churn_score=rec["sentiment"],
                         ltv_tier=rec["ltv_tier"],
-                        action_triggered=rec["action_triggered"],
+                        action_triggered=rec["recommended_action"],
                         status="DISPATCHED",
                         created_at=datetime.now(timezone.utc),
+                        approved_by=None,
+                        executed_at=None,
+                        xai_explanation=rec["xai_explanation"],
+                        urgency=rec["urgency"],
+                        root_cause=rec["root_cause"],
                     )
                 )
             db_session.commit()

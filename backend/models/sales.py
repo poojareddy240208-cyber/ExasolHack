@@ -128,6 +128,31 @@ class RetentionCampaignAudit(Base):
         index=True,
         doc="UTC timestamp of retention campaign trigger",
     )
+    approved_by: Mapped[Optional[str]] = mapped_column(
+        String(128),
+        nullable=True,
+        doc="Operator or user who approved the retention action",
+    )
+    executed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="UTC timestamp when the action was approved and executed",
+    )
+    xai_explanation: Mapped[Optional[str]] = mapped_column(
+        String(512),
+        nullable=True,
+        doc="Explainable AI reasoning for the context-aware retention action",
+    )
+    urgency: Mapped[Optional[str]] = mapped_column(
+        String(32),
+        nullable=True,
+        doc="NLP urgency rating ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')",
+    )
+    root_cause: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        doc="NLP root cause classification ('FULFILLMENT_FAILURE', 'PRODUCT_PREFERENCE', 'BILLING_ERROR')",
+    )
 
     def __repr__(self) -> str:
         return (

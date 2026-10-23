@@ -5,7 +5,7 @@ from backend.models.base import Base
 
 # Import all models to ensure they are registered with SQLAlchemy's metadata
 from backend.models.inventory import Inventory
-from backend.models.sales import SalesLedger, RetentionCampaignAudit, UserRiskCache
+from backend.models.sales import SalesLedger, RetentionCampaignAudit
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

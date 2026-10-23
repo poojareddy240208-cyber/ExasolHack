@@ -69,6 +69,27 @@ services:
       - omnisync_network
 
   # ============================================================================
+  # 3b. Database Bootstrap (one-shot)
+  # Role: Creates the PostgreSQL tables and seeds the demo inventory, then exits. The API and the Celery
+  # worker wait for it. Exasol setup is run separately once Exasol has finished booting:
+  #   docker-compose run --rm bootstrap python -m scripts.bootstrap --exasol
+  # ============================================================================
+  bootstrap:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: omnisync_bootstrap
+    command: python -m scripts.bootstrap
+    restart: "no"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - omnisync_network
+
+  # ============================================================================
   # 4. FastAPI Backend Application (API Gateway)
   # Role: High-throughput API routing, OCC checkout, and asynchronous webhook ingestion.
   # ============================================================================
@@ -87,6 +108,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
       exasol:
         condition: service_started
     networks:
@@ -111,6 +134,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
       exasol:
         condition: service_started
     networks:

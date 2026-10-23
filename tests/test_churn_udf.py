@@ -178,7 +178,7 @@ class TestExasolChurnUDF:
             "CREATE OR REPLACE PYTHON3 SCALAR SCRIPT OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE(cleaned_text VARCHAR(4000))"
             in sql
         )
-        assert "EMITS (churn_score DOUBLE)" in sql
+        assert "RETURNS DOUBLE AS" in sql  # a scalar function: callable in a SELECT list with other columns
 
     def test_get_churn_udf_sql_uses_global_worker_cache(self):
         sql = get_churn_udf_sql()
@@ -196,8 +196,9 @@ class TestExasolChurnUDF:
     def test_get_churn_udf_sql_fallback_on_null_and_error(self):
         sql = get_churn_udf_sql()
 
-        # Must safely emit 0.0 for empty text or errors
-        assert "ctx.emit(0.0)" in sql
+        # Must safely return 0.0 for empty text or errors
+        assert "return 0.0" in sql
+        assert "ctx.emit" not in sql
 
     def test_register_churn_udf_executes_on_connection(self):
         mock_conn = MagicMock()
@@ -209,7 +210,8 @@ class TestExasolChurnUDF:
 
         udf_statement = executed_statements[1]
         assert "CREATE OR REPLACE PYTHON3 SCALAR SCRIPT OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE" in udf_statement
-        assert "EMITS (churn_score DOUBLE)" in udf_statement
+        assert "RETURNS DOUBLE AS" in udf_statement
+        assert "EMITS" not in udf_statement
 
     def test_predict_churn_score_offline(self):
         # Empty / whitespace inputs return 0.0

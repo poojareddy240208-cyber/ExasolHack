@@ -148,7 +148,6 @@ def test_zendesk_webhook_broker_outage_returns_503(client: TestClient):
         assert "broker unavailable" in data["detail"].lower()
 
 
-
 # ------------------------------------------------------------------------------
 # Finalized Checkout API & Predictive Failsafe Tests
 # ------------------------------------------------------------------------------

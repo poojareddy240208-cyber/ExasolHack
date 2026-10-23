@@ -47,6 +47,9 @@ def handle_zendesk_webhook(
         task = process_zendesk_ticket_task.apply_async(
             args=[payload_dict],
             expires=10,
+            # Publish at most twice, 0.2s apart: with Redis down the API answers 503 in seconds, not minutes.
+            retry=True,
+            retry_policy={"max_retries": 1, "interval_start": 0, "interval_step": 0.2, "interval_max": 0.5},
         )
         active_task_id = task.id
     except (OperationalError, ConnectionError, TimeoutError, OSError) as exc:
@@ -59,7 +62,7 @@ def handle_zendesk_webhook(
         logger.error(f"Unexpected error enqueuing Zendesk ticket {payload.ticket_id}: {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Service unavailable: {str(exc)}",
+            detail="Service unavailable. Unable to enqueue support ticket.",  # no internal error text
         )
 
     return WebhookResponse(
@@ -68,4 +71,3 @@ def handle_zendesk_webhook(
         ticket_id=payload.ticket_id,
         message="Payload dispatched to Celery worker for asynchronous NLP sentiment and churn analysis.",
     )
-

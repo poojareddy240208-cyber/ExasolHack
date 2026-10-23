@@ -42,6 +42,9 @@ celery.conf.update(
     task_track_started=True,
     task_time_limit=300,  # 5 minutes maximum for batch tasks
     worker_prefetch_multiplier=1,
+    # Fail fast when Redis is unreachable so the API can answer 503 instead of hanging (connect timeout only;
+    # a socket read timeout would also affect the worker's long-polling connection).
+    broker_connection_timeout=2,
 )
 
 # Periodic Task Schedule (Celery Beat)
@@ -61,6 +64,11 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_app.trigger_identity_stitching_batch",
         "schedule": crontab(minute=0),  # Top of every hour
     },
+    # Module 4: score staged Zendesk tickets and join churn >= 0.85 with Top 20% LTV VIP customers
+    "vip-churn-radar-every-5-min": {
+        "task": "backend.celery_app.trigger_vip_churn_radar",
+        "schedule": 300.0,  # Every 5 minutes
+    },
 }
 
 
@@ -69,6 +77,9 @@ celery.conf.beat_schedule = {
     name="process_zendesk_ticket_task",
     max_retries=3,
     default_retry_delay=5,
+    # The webhook never reads the result. Ignoring it stops publish from subscribing to the Redis result
+    # backend, which made an outage hang the API for over a minute.
+    ignore_result=True,
 )
 def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -197,17 +208,44 @@ celery.tasks["backend.celery_app.process_zendesk_ticket_task"] = process_zendesk
 @celery.task(bind=True, name="backend.celery_app.trigger_exasol_inventory_sync")
 def trigger_exasol_inventory_sync(self):
     """
-    Celery Beat task: queries Exasol live_sku_telemetry and updates
-    PostgreSQL inventory table virtual_safety_buffer via SQLAlchemy.
+    Celery Beat task (every 5 minutes): refreshes the Exasol telemetry table from live Postgres stock and
+    Redis cart velocity, then has Exasol compute the virtual safety buffer (LightGBM UDF) and writes it to the
+    PostgreSQL `inventory.virtual_safety_buffer` column that checkout reads.
     """
-    from backend.services.reverse_etl import sync_inventory_buffer_to_postgres
+    from backend.services.reverse_etl import refresh_inventory_telemetry, sync_inventory_buffer_to_postgres
 
-    logger.info("[Celery Beat] Triggering Exasol predictive inventory buffer sync...")
-    return sync_inventory_buffer_to_postgres()
+    logger.info("[Celery Beat] Refreshing inventory telemetry and syncing virtual safety buffer...")
+    telemetry = refresh_inventory_telemetry()
+    return {**sync_inventory_buffer_to_postgres(), "telemetry_rows": telemetry["telemetry_rows"]}
 
 
+@celery.task(
+    bind=True,
+    name="backend.celery_app.trigger_vip_churn_radar",
+    soft_time_limit=240,
+)
+def trigger_vip_churn_radar(self):
+    """
+    Celery Beat task (every 5 minutes): runs the Exasol Golden JOIN over staged Zendesk tickets and records
+    each new VIP churn risk (churn >= 0.85, Top 20% LTV) in PostgreSQL `retention_campaign_audit`.
+    """
+    from backend.db.session import SessionLocal
+    from backend.services.retention_engine import run_retention_vip_join
 
-@celery.task(bind=True, name="backend.celery_app.trigger_exasol_return_risk_sync")
+    logger.info("[Celery Beat] Running VIP churn radar...")
+    session = SessionLocal()
+    try:
+        records = run_retention_vip_join(db_session=session)
+    finally:
+        session.close()
+    return {"status": "RADAR_COMPLETE", "vip_churn_risks": len(records)}
+
+
+@celery.task(
+    bind=True,
+    name="backend.celery_app.trigger_exasol_return_risk_sync",
+    soft_time_limit=240,  # below the 5-minute schedule so a slow run stops cleanly instead of being killed
+)
 def trigger_exasol_return_risk_sync(self):
     """
     Celery Beat task (every 5 minutes): recompute Return Risk Levels (1-5) inside Exasol, then have

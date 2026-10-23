@@ -23,6 +23,7 @@ driver entry in the Exasol settings.cfg - see the Exasol "Load data from Postgre
 
 import argparse
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from sqlalchemy import text
@@ -73,6 +74,16 @@ EXPORTS: Dict[str, Dict[str, object]] = {
             "computed_at",
         ],
     },
+    # Which identity fragments (Shopify account, guest device, Zendesk requester) make up each golden customer.
+    # The dashboard's Golden Record profile page reads this table; it only exists in Exasol otherwise.
+    "golden_customer_members": {
+        "source": (
+            "SELECT m.GOLDEN_CUSTOMER_ID, m.NODE_ID, n.NODE_TYPE, n.SOURCE_ID, m.CONFIDENCE "
+            "FROM GOLDEN_CUSTOMER_MEMBERS m JOIN IDENTITY_NODES n ON n.NODE_ID = m.NODE_ID"
+        ),
+        "stage": "golden_customer_members_stage",
+        "columns": ["golden_customer_id", "node_id", "node_type", "source_id", "confidence"],
+    },
 }
 
 # Upsert stage -> serving inside one transaction. DISTINCT ON guards against duplicate keys in a stage table.
@@ -118,6 +129,17 @@ UPSERT_SQL = [
     """
     DELETE FROM user_risk_cache
     WHERE user_id NOT IN (SELECT user_id FROM user_risk_cache_stage WHERE user_id IS NOT NULL)
+    """,
+    # Membership is replaced as a whole: a node can move to another golden customer between runs. Both
+    # statements run in the same transaction as the upserts above, so readers never see a half-empty table.
+    "DELETE FROM golden_customer_members",
+    """
+    INSERT INTO golden_customer_members (golden_customer_id, node_id, node_type, source_id, confidence, synced_at)
+    SELECT DISTINCT ON (golden_customer_id, node_id)
+        golden_customer_id, node_id, node_type, source_id, confidence, now()
+    FROM golden_customer_members_stage
+    WHERE golden_customer_id IS NOT NULL AND node_id IS NOT NULL
+    ORDER BY golden_customer_id, node_id
     """,
 ]
 
@@ -224,65 +246,115 @@ def _run_sync(pg, exasol_host: Optional[str]) -> Dict[str, object]:
     return result
 
 
+TELEMETRY_TABLE = (SCHEMA, "LIVE_SKU_TELEMETRY")
+TELEMETRY_COLUMNS = ["ITEM_ID", "CURRENT_PHYSICAL_STOCK", "CART_VELOCITY_5M", "TELEMETRY_TIMESTAMP"]
+
+# PRD formula, evaluated inside Exasol by the LightGBM UDF created in backend/db/exasol/01_inventory_predict_udf.sql:
+#   Buffer = MAX(0, Predicted_Demand_15m - Current_Physical_Stock + Active_Carts_5m)
+# The buffer is a computed value, not a stored column: LIVE_SKU_TELEMETRY only holds the model inputs.
+INVENTORY_BUFFER_QUERY = """
+SELECT ITEM_ID,
+       GREATEST(0,
+                OMNISYNC_ANALYTICS.PREDICT_DEMAND_15M(
+                    CAST(CART_VELOCITY_5M AS DOUBLE),
+                    CAST(TO_CHAR(TELEMETRY_TIMESTAMP, 'HH24') AS DOUBLE),
+                    CAST(TO_CHAR(TELEMETRY_TIMESTAMP, 'D') AS DOUBLE))
+                - CURRENT_PHYSICAL_STOCK + CART_VELOCITY_5M) AS VIRTUAL_SAFETY_BUFFER
+FROM OMNISYNC_ANALYTICS.LIVE_SKU_TELEMETRY
+"""
+
+
+def refresh_inventory_telemetry(
+    exasol_host: Optional[str] = None,
+    session: Optional[Session] = None,
+    cart_tracker: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """
+    Load the model inputs for every SKU into Exasol: current physical stock (PostgreSQL) and the number of
+    active carts in the last 5 minutes (Redis). Celery triggers this just before the buffer sync.
+    """
+    from backend.services.cart_tracker import get_cart_tracker
+
+    db: Session = session if session is not None else SessionLocal()
+    try:
+        stock_rows = db.execute(text("SELECT item_id, stock FROM inventory")).fetchall()
+    finally:
+        if session is None:
+            db.close()
+
+    tracker = cart_tracker if cart_tracker is not None else get_cart_tracker()
+    now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+    telemetry = []
+    for item_id, stock in stock_rows:
+        try:
+            velocity = int(tracker.get_cart_velocity(item_id))
+        except Exception as exc:  # Redis unavailable: treat as no carts rather than failing the whole sync
+            logger.warning("[reverse-etl] cart velocity unavailable for %s, using 0: %s", item_id, exc)
+            velocity = 0
+        telemetry.append((str(item_id), int(stock), velocity, now))
+
+    exasol = connect_exasol(host=exasol_host, schema=SCHEMA)
+    try:
+        exasol.execute("DELETE FROM OMNISYNC_ANALYTICS.LIVE_SKU_TELEMETRY")
+        if telemetry:
+            exasol.import_from_iterable(telemetry, TELEMETRY_TABLE, import_params={"columns": TELEMETRY_COLUMNS})
+    finally:
+        exasol.close()
+    logger.info("[reverse-etl] refreshed %d SKU telemetry rows in Exasol", len(telemetry))
+    return {"telemetry_rows": len(telemetry)}
+
+
 def sync_inventory_buffer_to_postgres(
     exasol_host: Optional[str] = None,
     session: Optional[Session] = None,
 ) -> Dict[str, Any]:
     """
-    Synchronizes virtual safety stock buffer from Exasol to PostgreSQL via SQLAlchemy.
+    Compute the virtual safety stock buffer in Exasol and write it to PostgreSQL.
 
-    Queries OMNISYNC_ANALYTICS.live_sku_telemetry in Exasol, iterates through the results,
-    and executes parameterized updates on the PostgreSQL inventory table:
+    Runs INVENTORY_BUFFER_QUERY in Exasol, then for each SKU executes the parameterized update:
         UPDATE inventory SET virtual_safety_buffer = :val WHERE item_id = :id
+    Checkout reads that column and rejects an order when quantity > stock - virtual_safety_buffer.
     """
-    query = "SELECT item_id, virtual_safety_buffer FROM OMNISYNC_ANALYTICS.live_sku_telemetry"
-    logger.info("[reverse-etl] Fetching live SKU telemetry from Exasol...")
+    logger.info("[reverse-etl] Computing virtual safety buffers in Exasol...")
 
     exasol = connect_exasol(host=exasol_host, schema=SCHEMA)
     try:
-        stmt = exasol.execute(query)
-        if hasattr(stmt, "fetchall"):
-            rows = stmt.fetchall()
-        elif hasattr(exasol, "export_to_list"):
-            rows = exasol.export_to_list(query)
-        else:
-            rows = list(stmt)
+        rows = exasol.execute(INVENTORY_BUFFER_QUERY).fetchall()
     finally:
         exasol.close()
 
     db: Session = session if session is not None else SessionLocal()
-    should_close = session is None
-
-    update_stmt = text(
-        "UPDATE inventory SET virtual_safety_buffer = :val WHERE item_id = :id"
-    )
+    update_stmt = text("UPDATE inventory SET virtual_safety_buffer = :val WHERE item_id = :id")
 
     updated_count = 0
+    unknown_items = []
     try:
         for row in rows:
-            if isinstance(row, dict):
-                item_id = row.get("item_id") or row.get("ITEM_ID")
-                val = row.get("virtual_safety_buffer") or row.get("VIRTUAL_SAFETY_BUFFER", 0)
+            item_id, val = str(row[0]), int(row[1] or 0)
+            result = db.execute(update_stmt, {"val": val, "id": item_id})
+            if result.rowcount:
+                updated_count += result.rowcount
             else:
-                item_id = row[0]
-                val = row[1] if len(row) > 1 else 0
-
-            db.execute(update_stmt, {"val": int(val), "id": str(item_id)})
-            updated_count += 1
+                unknown_items.append(item_id)
         db.commit()
-        logger.info(f"[reverse-etl] Successfully synced virtual_safety_buffer for {updated_count} items to PostgreSQL.")
     except Exception as exc:
         db.rollback()
         logger.error(f"[reverse-etl] Failed to update PostgreSQL inventory buffer: {exc}")
         raise
     finally:
-        if should_close:
+        if session is None:
             db.close()
 
+    if unknown_items:
+        logger.warning(
+            "[reverse-etl] %d telemetry SKUs are not in PostgreSQL inventory: %s", len(unknown_items), unknown_items
+        )
+    logger.info("[reverse-etl] synced virtual_safety_buffer for %d inventory rows", updated_count)
     return {
         "status": "SYNC_COMPLETE",
         "target": "POSTGRES_INVENTORY_BUFFER",
         "records_updated": updated_count,
+        "unknown_items": len(unknown_items),
     }
 
 

@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS user_risk_cache (
     return_rate        NUMERIC(5, 4) NOT NULL CHECK (return_rate >= 0),  -- returns / purchases, 6-month window
     purchases_6m       INTEGER NOT NULL CHECK (purchases_6m >= 0),
     returns_6m         INTEGER NOT NULL CHECK (returns_6m >= 0),
-    computed_at        TIMESTAMPTZ NOT NULL,            -- when Exasol calculated it
+    computed_at        TIMESTAMPTZ NOT NULL DEFAULT now(), -- when Exasol calculated it
+    source_watermark   TIMESTAMPTZ,                        -- upstream source watermark timestamp
     synced_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -108,6 +109,30 @@ CREATE TABLE IF NOT EXISTS golden_customer_members (
 
 CREATE INDEX IF NOT EXISTS idx_golden_members_source ON golden_customer_members (source_id);
 CREATE INDEX IF NOT EXISTS idx_golden_customers_email ON golden_customers (lower(primary_email));
+
+-- Identity evidence tracking events contributing to golden identity resolution
+CREATE TABLE IF NOT EXISTS identity_evidence (
+    source_id           TEXT NOT NULL,
+    event_type          TEXT NOT NULL,
+    confidence_weight   NUMERIC(5, 4) NOT NULL,
+    linked_to_golden_id TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_identity_evidence_source ON identity_evidence (source_id);
+CREATE INDEX IF NOT EXISTS idx_identity_evidence_golden ON identity_evidence (linked_to_golden_id);
+
+-- Candidate pairwise links awaiting probabilistic merge or human operator review
+CREATE TABLE IF NOT EXISTS candidate_links (
+    node_a              TEXT NOT NULL,
+    node_b              TEXT NOT NULL,
+    model_score         NUMERIC(5, 4) NOT NULL,
+    human_review_status TEXT NOT NULL DEFAULT 'PENDING',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_candidate_links_nodes ON candidate_links (node_a, node_b);
+CREATE INDEX IF NOT EXISTS idx_candidate_links_status ON candidate_links (human_review_status);
 
 -- -----------------------------------------------------------------------------
 -- 3. Stage tables (target of Exasol EXPORT ... INTO JDBC; truncated every sync)
@@ -130,7 +155,8 @@ CREATE TABLE IF NOT EXISTS user_risk_cache_stage (
     return_rate        NUMERIC(5, 4),
     purchases_6m       INTEGER,
     returns_6m         INTEGER,
-    computed_at        TIMESTAMPTZ
+    computed_at        TIMESTAMPTZ,
+    source_watermark   TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS golden_customer_members_stage (

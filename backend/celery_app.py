@@ -69,6 +69,11 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_app.trigger_vip_churn_radar",
         "schedule": 300.0,  # Every 5 minutes
     },
+    # Inventory Reservation Reaper: releases expired PENDING reservations every 60 seconds
+    "reap-expired-inventory-reservations-every-60s": {
+        "task": "backend.celery_app.reap_expired_reservations_task",
+        "schedule": 60.0,  # Every 60 seconds
+    },
 }
 
 
@@ -99,14 +104,22 @@ def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[st
         Structured result summary including status, ticket_id, and staging details.
     """
     if not isinstance(ticket_payload, dict):
-        logger.error(f"[Celery] Invalid ticket payload type received: {type(ticket_payload)}")
-        raise ValueError(f"Expected dict for ticket_payload, received {type(ticket_payload).__name__}")
+        logger.error(
+            f"[Celery] Invalid ticket payload type received: {type(ticket_payload)}"
+        )
+        raise ValueError(
+            f"Expected dict for ticket_payload, received {type(ticket_payload).__name__}"
+        )
 
     # Extract ticket_id from direct keys or nested ticket structure
     ticket_id = (
         ticket_payload.get("ticket_id")
         or ticket_payload.get("id")
-        or (ticket_payload.get("ticket", {}).get("id") if isinstance(ticket_payload.get("ticket"), dict) else None)
+        or (
+            ticket_payload.get("ticket", {}).get("id")
+            if isinstance(ticket_payload.get("ticket"), dict)
+            else None
+        )
     )
     if not ticket_id:
         logger.error(f"[Celery] Missing ticket_id in payload: {ticket_payload}")
@@ -124,7 +137,11 @@ def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[st
             if isinstance(ticket_payload.get("ticket"), dict)
             else None
         )
-        or (ticket_payload.get("ticket", {}).get("user_id") if isinstance(ticket_payload.get("ticket"), dict) else None)
+        or (
+            ticket_payload.get("ticket", {}).get("user_id")
+            if isinstance(ticket_payload.get("ticket"), dict)
+            else None
+        )
     )
     user_id = str(user_id).strip() if user_id is not None else None
 
@@ -142,7 +159,11 @@ def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[st
         description_text = str(description_text)
 
     # If top-level text is empty, check nested ticket structure
-    if not comment_text and not description_text and isinstance(ticket_payload.get("ticket"), dict):
+    if (
+        not comment_text
+        and not description_text
+        and isinstance(ticket_payload.get("ticket"), dict)
+    ):
         nested_ticket = ticket_payload["ticket"]
         nested_comment = nested_ticket.get("comment")
         if isinstance(nested_comment, dict):
@@ -160,7 +181,9 @@ def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[st
 
     # Extract and normalize timestamp
     created_at_raw = ticket_payload.get("created_at") or (
-        ticket_payload.get("ticket", {}).get("created_at") if isinstance(ticket_payload.get("ticket"), dict) else None
+        ticket_payload.get("ticket", {}).get("created_at")
+        if isinstance(ticket_payload.get("ticket"), dict)
+        else None
     )
     created_at = normalize_timestamp(created_at_raw)
 
@@ -187,7 +210,10 @@ def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[st
         )
         raise self.retry(exc=exc, countdown=5)
     except Exception as exc:
-        logger.error(f"[Celery] Unhandled error while staging ticket {ticket_id}: {exc}", exc_info=True)
+        logger.error(
+            f"[Celery] Unhandled error while staging ticket {ticket_id}: {exc}",
+            exc_info=True,
+        )
         raise
 
     return {
@@ -202,7 +228,9 @@ def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[st
 
 
 # Register alias under fully-qualified name for backwards compatibility
-celery.tasks["backend.celery_app.process_zendesk_ticket_task"] = process_zendesk_ticket_task
+celery.tasks["backend.celery_app.process_zendesk_ticket_task"] = (
+    process_zendesk_ticket_task
+)
 
 
 @celery.task(bind=True, name="backend.celery_app.trigger_exasol_inventory_sync")
@@ -212,11 +240,19 @@ def trigger_exasol_inventory_sync(self):
     Redis cart velocity, then has Exasol compute the virtual safety buffer (LightGBM UDF) and writes it to the
     PostgreSQL `inventory.virtual_safety_buffer` column that checkout reads.
     """
-    from backend.services.reverse_etl import refresh_inventory_telemetry, sync_inventory_buffer_to_postgres
+    from backend.services.reverse_etl import (
+        refresh_inventory_telemetry,
+        sync_inventory_buffer_to_postgres,
+    )
 
-    logger.info("[Celery Beat] Refreshing inventory telemetry and syncing virtual safety buffer...")
+    logger.info(
+        "[Celery Beat] Refreshing inventory telemetry and syncing virtual safety buffer..."
+    )
     telemetry = refresh_inventory_telemetry()
-    return {**sync_inventory_buffer_to_postgres(), "telemetry_rows": telemetry["telemetry_rows"]}
+    return {
+        **sync_inventory_buffer_to_postgres(),
+        "telemetry_rows": telemetry["telemetry_rows"],
+    }
 
 
 @celery.task(
@@ -257,9 +293,15 @@ def trigger_exasol_return_risk_sync(self):
 
     logger.info("[Celery Beat] Recomputing Return Risk Levels in Exasol...")
     risk_counts = run_return_risk_scoring()
-    logger.info("[Celery Beat] Exporting Module 3 metrics Exasol -> Postgres via EXPORT INTO JDBC...")
+    logger.info(
+        "[Celery Beat] Exporting Module 3 metrics Exasol -> Postgres via EXPORT INTO JDBC..."
+    )
     sync_result = sync_module3_to_postgres()
-    return {"target": "POSTGRES_USER_RISK_CACHE", "risk_level_counts": risk_counts, **sync_result}
+    return {
+        "target": "POSTGRES_USER_RISK_CACHE",
+        "risk_level_counts": risk_counts,
+        **sync_result,
+    }
 
 
 @celery.task(
@@ -275,4 +317,31 @@ def trigger_identity_stitching_batch(self):
     from backend.services.identity_stitching import run_identity_stitching
 
     logger.info("[Celery Beat] Triggering Exasol Identity Stitching batch job...")
-    return {"status": "STITCHING_COMPLETE", "target": "EXASOL_GOLDEN_RECORD", **run_identity_stitching()}
+    return {
+        "status": "STITCHING_COMPLETE",
+        "target": "EXASOL_GOLDEN_RECORD",
+        **run_identity_stitching(),
+    }
+
+
+@celery.task(
+    bind=True,
+    name="backend.celery_app.reap_expired_reservations_task",
+    soft_time_limit=50,
+)
+def reap_expired_reservations_task(self):
+    """
+    Celery Beat task (every 60 seconds): finds expired PENDING reservations,
+    marks them EXPIRED, and decrements reserved_stock to restore available inventory.
+    """
+    from backend.db.session import SessionLocal
+    from backend.services.inventory_manager import release_expired_reservations
+
+    logger.info("[Celery Beat] Reaping expired inventory reservations...")
+    db = SessionLocal()
+    try:
+        count = release_expired_reservations(db)
+        logger.info(f"[Celery Beat] Released {count} expired inventory reservations.")
+        return {"status": "SUCCESS", "released_count": count}
+    finally:
+        db.close()

@@ -10,10 +10,11 @@ OPEN SCHEMA OMNISYNC_ANALYTICS;
 
 --/
 CREATE OR REPLACE PYTHON3 SCALAR SCRIPT OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE(cleaned_text VARCHAR(4000))
-RETURNS DOUBLE AS
+RETURNS VARCHAR(2000) AS
 
 import os
 import sys
+import json
 
 # ==============================================================================
 # Worker-Level Model Cache
@@ -66,29 +67,24 @@ def _init_sentiment_model():
 def run(ctx):
     """
     Processes each incoming row, predicting churn probability from ticket sentiment.
-
-    SST-2 Classification Mapping:
-    - Label 0: NEGATIVE
-    - Label 1: POSITIVE
-    Dissatisfied / negative sentiment directly correlates with customer churn intent.
-    Softmax probability of NEGATIVE (label 0) is returned as the churn score (0.0 to 1.0).
+    Outputs a structured JSON string: {"sentiment": X, "urgency": Y, "root_cause": Z}.
     """
     raw_val = ctx.cleaned_text
 
     # Guard against null, empty, or whitespace-only inputs
     if raw_val is None:
-        return 0.0
+        return json.dumps({"sentiment": 0.0, "urgency": 0.0, "root_cause": "NONE"})
 
     text = str(raw_val).strip()
     if not text:
-        return 0.0
+        return json.dumps({"sentiment": 0.0, "urgency": 0.0, "root_cause": "NONE"})
 
     try:
         _init_sentiment_model()
 
         if _MODEL is None or _TOKENIZER is None:
             # Fallback if model files are inaccessible
-            return 0.0
+            return json.dumps({"sentiment": 0.0, "urgency": 0.0, "root_cause": "NONE"})
 
         import torch
 
@@ -110,8 +106,14 @@ def run(ctx):
 
             # Bound score between 0.0 and 1.0
             churn_score = max(0.0, min(1.0, neg_prob))
-            return churn_score
+            urgency = churn_score
+            root_cause = "SERVICE_ISSUE" if churn_score >= 0.5 else "NONE"
+            return json.dumps({
+                "sentiment": round(churn_score, 4),
+                "urgency": round(urgency, 4),
+                "root_cause": root_cause,
+            })
     except Exception as exc:
-        # Invariant: Never abort the analytics query on bad row text; return 0.0 fallback
-        return 0.0
+        # Invariant: Never abort the analytics query on bad row text; return fallback JSON
+        return json.dumps({"sentiment": 0.0, "urgency": 0.0, "root_cause": "NONE"})
 /

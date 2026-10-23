@@ -31,15 +31,27 @@ from backend.db.session import SessionLocal, engine
 from backend.models.base import Base
 
 # Importing the models registers their tables with SQLAlchemy's metadata.
-from backend.models.inventory import Inventory
-from backend.models.sales import RetentionCampaignAudit, SalesLedger  # noqa: F401
+from backend.models.inventory import Inventory, InventoryReservation  # noqa: F401
+from backend.models.sales import (
+    RetentionCampaignAudit,
+    SalesLedger,
+    UserRiskCache,
+)  # noqa: F401
 from scripts.apply_schemas import apply_exasol, apply_postgres
 
 logger = logging.getLogger("omnisync.bootstrap")
 
 UDF_FILES = [
-    Path(__file__).resolve().parent.parent / "backend" / "db" / "exasol" / "01_inventory_predict_udf.sql",
-    Path(__file__).resolve().parent.parent / "backend" / "db" / "exasol" / "02_nlp_churn_udf.sql",
+    Path(__file__).resolve().parent.parent
+    / "backend"
+    / "db"
+    / "exasol"
+    / "01_inventory_predict_udf.sql",
+    Path(__file__).resolve().parent.parent
+    / "backend"
+    / "db"
+    / "exasol"
+    / "02_nlp_churn_udf.sql",
 ]
 
 SEED_ITEMS = [
@@ -56,7 +68,12 @@ def seed_inventory() -> int:
         if db.query(Inventory).count() > 0:
             logger.info("Inventory already has rows, skipping seed.")
             return 0
-        db.add_all([Inventory(version=1, virtual_safety_buffer=0, **item) for item in SEED_ITEMS])
+        db.add_all(
+            [
+                Inventory(version=1, virtual_safety_buffer=0, **item)
+                for item in SEED_ITEMS
+            ]
+        )
         db.commit()
         logger.info("Seeded %d inventory items.", len(SEED_ITEMS))
         return len(SEED_ITEMS)
@@ -67,7 +84,10 @@ def seed_inventory() -> int:
 def udf_statements(sql_path: Path) -> List[str]:
     """Extract the `--/ ... /` script blocks (CREATE ... SCRIPT) from an Exasol SQL file, without the markers."""
     text = sql_path.read_text(encoding="utf-8")
-    return [block.strip() for block in re.findall(r"^--/\s*\n(.*?)^/\s*$", text, flags=re.S | re.M)]
+    return [
+        block.strip()
+        for block in re.findall(r"^--/\s*\n(.*?)^/\s*$", text, flags=re.S | re.M)
+    ]
 
 
 def setup_exasol(host: Optional[str]) -> None:
@@ -101,8 +121,16 @@ def init_db(host: Optional[str] = None, with_exasol: bool = False) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Bootstrap the OmniSync databases.")
-    parser.add_argument("--exasol", action="store_true", help="also set up Exasol (schemas, UDFs, JDBC connection)")
-    parser.add_argument("--localhost", action="store_true", help="connect to localhost instead of docker hostnames")
+    parser.add_argument(
+        "--exasol",
+        action="store_true",
+        help="also set up Exasol (schemas, UDFs, JDBC connection)",
+    )
+    parser.add_argument(
+        "--localhost",
+        action="store_true",
+        help="connect to localhost instead of docker hostnames",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     init_db(host="localhost" if args.localhost else None, with_exasol=args.exasol)

@@ -38,9 +38,14 @@ CREATE TABLE golden_customer_members (golden_customer_id TEXT NOT NULL, node_id 
 
 
 def _build_session(with_dashboard_tables=True):
-    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(bind=engine)
     session = sessionmaker(bind=engine)()
+    session.execute(text("DROP TABLE IF EXISTS user_risk_cache"))
     if with_dashboard_tables:
         for statement in filter(None, (s.strip() for s in TABLES.split(";"))):
             session.execute(text(statement))
@@ -56,7 +61,9 @@ def _build_session(with_dashboard_tables=True):
             ]
         ):
             session.execute(
-                text("INSERT INTO golden_customers VALUES (:i, :e, :m, :s, NULL, NULL, :t)"),
+                text(
+                    "INSERT INTO golden_customers VALUES (:i, :e, :m, :s, NULL, NULL, :t)"
+                ),
                 {"i": cid, "e": email, "m": members, "s": spend, "t": fresh},
             )
         for row in [
@@ -66,18 +73,39 @@ def _build_session(with_dashboard_tables=True):
             ("CUST-A", "SHOPIFY:user_000001", "SHOPIFY", "user_000001", 1.0),
         ]:
             session.execute(
-                text("INSERT INTO golden_customer_members VALUES (:a,:b,:c,:d,:e,NULL)"), dict(zip("abcde", row))
+                text(
+                    "INSERT INTO golden_customer_members VALUES (:a,:b,:c,:d,:e,NULL)"
+                ),
+                dict(zip("abcde", row)),
             )
         session.execute(
-            text("INSERT INTO user_risk_cache VALUES ('user_000005','CUST-E',5,0.75,8,6,:t,:t)"), {"t": fresh}
+            text(
+                "INSERT INTO user_risk_cache VALUES ('user_000005','CUST-E',5,0.75,8,6,:t,:t)"
+            ),
+            {"t": fresh},
         )
         session.execute(
-            text("INSERT INTO user_risk_cache VALUES ('user_000001','CUST-A',3,0.3,10,3,:t,:t)"), {"t": fresh}
+            text(
+                "INSERT INTO user_risk_cache VALUES ('user_000001','CUST-A',3,0.3,10,3,:t,:t)"
+            ),
+            {"t": fresh},
         )
     session.add_all(
         [
-            Inventory(item_id="SKU-A", name="Item A", stock=10, version=4, virtual_safety_buffer=9),
-            Inventory(item_id="SKU-B", name="Item B", stock=5, version=1, virtual_safety_buffer=0),
+            Inventory(
+                item_id="SKU-A",
+                name="Item A",
+                stock=10,
+                version=4,
+                virtual_safety_buffer=9,
+            ),
+            Inventory(
+                item_id="SKU-B",
+                name="Item B",
+                stock=5,
+                version=1,
+                virtual_safety_buffer=0,
+            ),
         ]
     )
     session.add_all(
@@ -141,7 +169,9 @@ def make_client():
         session = _build_session(with_dashboard_tables)
         created.append(session)
         app.dependency_overrides[get_db] = lambda: (yield session)
-        app.dependency_overrides[get_cart_tracker] = lambda: tracker or _tracker({"SKU-A": 3})
+        app.dependency_overrides[get_cart_tracker] = lambda: tracker or _tracker(
+            {"SKU-A": 3}
+        )
         return TestClient(app, raise_server_exceptions=False), session
 
     yield _make
@@ -153,11 +183,17 @@ def make_client():
 # ------------------------------------------------------------------ docs match reality
 def test_endpoints_md_lists_exactly_the_real_routes():
     documented = set(
-        re.findall(r"^\| `(GET|POST)` \| `(/[^`]*)` \|", (ROOT / "endpoints.md").read_text(encoding="utf-8"), re.M)
+        re.findall(
+            r"^\| `(GET|POST)` \| `(/[^`]*)` \|",
+            (ROOT / "endpoints.md").read_text(encoding="utf-8"),
+            re.M,
+        )
     )
     schema = TestClient(app).get("/openapi.json").json()["paths"]
     real = {(method.upper(), path) for path, ops in schema.items() for method in ops}
-    real.add(("GET", "/"))  # the root index is deliberately hidden from the OpenAPI schema
+    real.add(
+        ("GET", "/")
+    )  # the root index is deliberately hidden from the OpenAPI schema
     # endpoints.md writes path parameters as {name}, same as OpenAPI
     assert (
         documented == real
@@ -193,7 +229,10 @@ def test_system_status_healthy(make_client):
         "exasol_olap": "UP",
     }
     assert body["data_freshness"]["stale"] is False
-    assert body["row_counts"]["golden_customers"] == 5 and body["row_counts"]["inventory"] == 2
+    assert (
+        body["row_counts"]["golden_customers"] == 5
+        and body["row_counts"]["inventory"] == 2
+    )
 
 
 def test_system_status_degraded_when_a_service_is_down(make_client):
@@ -201,7 +240,9 @@ def test_system_status_degraded_when_a_service_is_down(make_client):
     p1, p2, p3 = _probes(exasol=ConnectionRefusedError("refused"))
     with p1, p2, p3:
         response = client.get("/api/v1/system/status")
-    assert response.status_code == 200  # the UI renders the failure; the endpoint itself does not error
+    assert (
+        response.status_code == 200
+    )  # the UI renders the failure; the endpoint itself does not error
     body = response.json()
     assert body["status"] == "DEGRADED"
     assert (
@@ -217,22 +258,40 @@ def test_system_status_flags_a_stale_or_missing_sync(make_client):
     session.commit()
     p1, p2, p3 = _probes()
     with p1, p2, p3:
-        assert client.get("/api/v1/system/status").json()["data_freshness"]["stale"] is True
+        assert (
+            client.get("/api/v1/system/status").json()["data_freshness"]["stale"]
+            is True
+        )
     client, _ = make_client(with_dashboard_tables=False)
     with p1, p2, p3:
         body = client.get("/api/v1/system/status").json()
-    assert body["status"] == "DEGRADED" and body["row_counts"]["user_risk_cache"] is None
+    assert (
+        body["status"] == "DEGRADED" and body["row_counts"]["user_risk_cache"] is None
+    )
 
 
 # ------------------------------------------------------------------ inventory & cart
 def test_inventory_list_with_live_carts(make_client):
     client, _ = make_client()
     body = client.get("/api/v1/inventory").json()
-    assert body["total_items"] == 2 and body["redis_available"] is True and body["total_active_carts_5m"] == 3
+    assert (
+        body["total_items"] == 2
+        and body["redis_available"] is True
+        and body["total_active_carts_5m"] == 3
+    )
     a, b = body["items"]
-    assert (a["item_id"], a["stock"], a["virtual_safety_buffer"], a["available_stock"]) == ("SKU-A", 10, 9, 1)
-    assert a["active_carts_5m"] == 3 and a["predicted_demand_15m_estimate"] == 16  # 9 + 10 - 3
-    assert b["available_stock"] == 5 and b["predicted_demand_15m_estimate"] is None  # buffer 0 is clamped
+    assert (
+        a["item_id"],
+        a["stock"],
+        a["virtual_safety_buffer"],
+        a["available_stock"],
+    ) == ("SKU-A", 10, 9, 1)
+    assert (
+        a["active_carts_5m"] == 3 and a["predicted_demand_15m_estimate"] == 16
+    )  # 9 + 10 - 3
+    assert (
+        b["available_stock"] == 5 and b["predicted_demand_15m_estimate"] is None
+    )  # buffer 0 is clamped
 
 
 def test_inventory_list_survives_redis_outage(make_client):
@@ -240,7 +299,9 @@ def test_inventory_list_survives_redis_outage(make_client):
     response = client.get("/api/v1/inventory")
     body = response.json()
     assert response.status_code == 200 and body["redis_available"] is False
-    assert body["total_active_carts_5m"] is None and all(i["active_carts_5m"] is None for i in body["items"])
+    assert body["total_active_carts_5m"] is None and all(
+        i["active_carts_5m"] is None for i in body["items"]
+    )
 
 
 def test_inventory_item_found_and_missing(make_client):
@@ -251,12 +312,18 @@ def test_inventory_item_found_and_missing(make_client):
 
 
 def test_inventory_503_when_tables_are_missing():
-    session = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    session = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     session = sessionmaker(bind=session)()  # no tables at all: bootstrap has not run
     app.dependency_overrides[get_db] = lambda: (yield session)
     app.dependency_overrides[get_cart_tracker] = lambda: _tracker()
     try:
-        response = TestClient(app, raise_server_exceptions=False).get("/api/v1/inventory")
+        response = TestClient(app, raise_server_exceptions=False).get(
+            "/api/v1/inventory"
+        )
     finally:
         app.dependency_overrides.clear()
     assert response.status_code == 503 and "bootstrap" in response.json()["detail"]
@@ -264,9 +331,17 @@ def test_inventory_503_when_tables_are_missing():
 
 def test_cart_add_then_velocity(make_client):
     client, _ = make_client(tracker=_tracker())
-    first = client.post("/api/v1/cart/add", json={"item_id": "SKU-A", "user_session_id": "s1"})
-    second = client.post("/api/v1/cart/add", json={"item_id": "SKU-A", "user_session_id": "s2"})
-    assert first.status_code == 200 and first.json()["active_carts_5m"] == 1 and first.json()["window_seconds"] == 300
+    first = client.post(
+        "/api/v1/cart/add", json={"item_id": "SKU-A", "user_session_id": "s1"}
+    )
+    second = client.post(
+        "/api/v1/cart/add", json={"item_id": "SKU-A", "user_session_id": "s2"}
+    )
+    assert (
+        first.status_code == 200
+        and first.json()["active_carts_5m"] == 1
+        and first.json()["window_seconds"] == 300
+    )
     assert second.json()["active_carts_5m"] == 2
     assert client.get("/api/v1/cart/velocity/SKU-A").json() == {
         "item_id": "SKU-A",
@@ -277,32 +352,66 @@ def test_cart_add_then_velocity(make_client):
 
 def test_cart_add_unknown_item_validation_and_redis_down(make_client):
     client, _ = make_client()
-    assert client.post("/api/v1/cart/add", json={"item_id": "NOPE", "user_session_id": "s"}).status_code == 404
+    assert (
+        client.post(
+            "/api/v1/cart/add", json={"item_id": "NOPE", "user_session_id": "s"}
+        ).status_code
+        == 404
+    )
     assert client.post("/api/v1/cart/add", json={"item_id": "SKU-A"}).status_code == 422
     down, _ = make_client(tracker=_tracker(fail=True))
-    assert down.post("/api/v1/cart/add", json={"item_id": "SKU-A", "user_session_id": "s"}).status_code == 503
+    assert (
+        down.post(
+            "/api/v1/cart/add", json={"item_id": "SKU-A", "user_session_id": "s"}
+        ).status_code
+        == 503
+    )
     assert down.get("/api/v1/cart/velocity/SKU-A").status_code == 503
 
 
 # ------------------------------------------------------------------ return risk
 def test_return_risk_policies(make_client):
     client, _ = make_client()
-    policies = {p["level"]: p for p in client.get("/api/v1/return-risk/policies").json()["policies"]}
+    policies = {
+        p["level"]: p
+        for p in client.get("/api/v1/return-risk/policies").json()["policies"]
+    }
     assert sorted(policies) == [1, 2, 3, 4, 5]
-    assert [policies[level]["defined_in_prd"] for level in (1, 2, 3, 4, 5)] == [True, False, True, False, True]
+    assert [policies[level]["defined_in_prd"] for level in (1, 2, 3, 4, 5)] == [
+        True,
+        False,
+        True,
+        False,
+        True,
+    ]
     assert policies[3]["keep_it_discount_pct"] == 10
-    assert policies[5]["restocking_fee_usd"] == 5.0 and policies[5]["cash_on_delivery_allowed"] is False
+    assert (
+        policies[5]["restocking_fee_usd"] == 5.0
+        and policies[5]["cash_on_delivery_allowed"] is False
+    )
     assert policies[1]["cash_on_delivery_allowed"] is True
 
 
 def test_return_risk_for_known_and_unknown_shopper(make_client):
     client, _ = make_client()
     known = client.get("/api/v1/return-risk/user_000005").json()
-    assert known["found"] is True and known["risk_level"] == 5 and known["return_rate"] == 0.75
-    assert (known["purchases_6m"], known["returns_6m"], known["golden_customer_id"]) == (8, 6, "CUST-E")
+    assert (
+        known["found"] is True
+        and known["risk_level"] == 5
+        and known["return_rate"] == 0.75
+    )
+    assert (
+        known["purchases_6m"],
+        known["returns_6m"],
+        known["golden_customer_id"],
+    ) == (8, 6, "CUST-E")
     assert known["policy"]["cash_on_delivery_allowed"] is False
     new = client.get("/api/v1/return-risk/brand_new_user").json()
-    assert new["found"] is False and new["risk_level"] == 1 and new["policy"]["restocking_fee_usd"] == 0.0
+    assert (
+        new["found"] is False
+        and new["risk_level"] == 1
+        and new["policy"]["restocking_fee_usd"] == 0.0
+    )
 
 
 def test_return_risk_503_when_cache_table_missing(make_client):
@@ -315,7 +424,10 @@ def test_golden_stats(make_client):
     client, _ = make_client()
     body = client.get("/api/v1/golden-customers/stats").json()
     assert body["golden_customers"] == 5 and body["stitched_nodes"] == 11  # 3+1+1+2+4
-    assert body["multi_identity_customers"] == 3 and body["avg_members_per_customer"] == 2.2
+    assert (
+        body["multi_identity_customers"] == 3
+        and body["avg_members_per_customer"] == 2.2
+    )
 
 
 @pytest.mark.parametrize(
@@ -332,8 +444,18 @@ def test_golden_search_finds_a_customer_by_any_identity(make_client, query):
 
 def test_golden_search_no_match_limit_and_validation(make_client):
     client, _ = make_client()
-    assert client.get("/api/v1/golden-customers", params={"q": "nobody-at-all"}).json()["count"] == 0
-    assert client.get("/api/v1/golden-customers", params={"q": "@example.com", "limit": 2}).json()["count"] == 2
+    assert (
+        client.get("/api/v1/golden-customers", params={"q": "nobody-at-all"}).json()[
+            "count"
+        ]
+        == 0
+    )
+    assert (
+        client.get(
+            "/api/v1/golden-customers", params={"q": "@example.com", "limit": 2}
+        ).json()["count"]
+        == 2
+    )
     assert client.get("/api/v1/golden-customers", params={"q": "x"}).status_code == 422
     assert client.get("/api/v1/golden-customers").status_code == 422
 
@@ -341,21 +463,34 @@ def test_golden_search_no_match_limit_and_validation(make_client):
 def test_golden_profile_has_members_ltv_and_return_risk(make_client):
     client, _ = make_client()
     body = client.get("/api/v1/golden-customers/CUST-E").json()
-    assert body["primary_email"] == "eve@example.com" and body["total_spend_usd"] == 500.0
+    assert (
+        body["primary_email"] == "eve@example.com" and body["total_spend_usd"] == 500.0
+    )
     assert body["ltv_percent_rank"] == 1.0 and body["ltv_tier"] == "Top 1% VIP"
-    assert [(m["node_type"], m["source_id"], m["confidence"]) for m in body["members"]] == [
+    assert [
+        (m["node_type"], m["source_id"], m["confidence"]) for m in body["members"]
+    ] == [
         ("SHOPIFY", "user_000005", 1.0),
         ("DEVICE", "dev_aaa", 0.98),
         ("ZENDESK", "eve@example.com", 0.95),
     ]
-    assert body["return_risk"]["risk_level"] == 5 and body["return_risk"]["policy"]["name"] == "Penalty Guard"
+    assert (
+        body["return_risk"]["risk_level"] == 5
+        and body["return_risk"]["policy"]["name"] == "Penalty Guard"
+    )
     low = client.get("/api/v1/golden-customers/CUST-A").json()
-    assert low["ltv_tier"] == "Standard" and low["ltv_percent_rank"] == 0.0 and low["return_risk"]["risk_level"] == 3
+    assert (
+        low["ltv_tier"] == "Standard"
+        and low["ltv_percent_rank"] == 0.0
+        and low["return_risk"]["risk_level"] == 3
+    )
 
 
 def test_golden_profile_without_risk_and_unknown_id(make_client):
     client, _ = make_client()
-    assert client.get("/api/v1/golden-customers/CUST-D").json()["return_risk"] is None  # no members/risk synced
+    assert (
+        client.get("/api/v1/golden-customers/CUST-D").json()["return_risk"] is None
+    )  # no members/risk synced
     assert client.get("/api/v1/golden-customers/CUST-NOPE").status_code == 404
 
 
@@ -363,10 +498,18 @@ def test_golden_profile_without_risk_and_unknown_id(make_client):
 def test_churn_alerts_newest_first_with_window_count(make_client):
     client, _ = make_client()
     body = client.get("/api/v1/churn/alerts").json()
-    assert body["total_alerts"] == 3 and body["count_in_window"] == 2 and body["since_hours"] == 24
+    assert (
+        body["total_alerts"] == 3
+        and body["count_in_window"] == 2
+        and body["since_hours"] == 24
+    )
     assert [a["ticket_id"] for a in body["alerts"]] == ["ZD-1", "ZD-2", "ZD-OLD"]
     first = body["alerts"][0]
-    assert (first["golden_customer_id"], first["customer_email"], first["churn_score"]) == (
+    assert (
+        first["golden_customer_id"],
+        first["customer_email"],
+        first["churn_score"],
+    ) == (
         "CUST-E",
         "eve@example.com",
         0.97,
@@ -377,11 +520,24 @@ def test_churn_alerts_newest_first_with_window_count(make_client):
 def test_churn_alert_filters_and_missing_golden_record(make_client):
     client, _ = make_client()
     assert [
-        a["ticket_id"] for a in client.get("/api/v1/churn/alerts", params={"min_score": 0.95}).json()["alerts"]
+        a["ticket_id"]
+        for a in client.get("/api/v1/churn/alerts", params={"min_score": 0.95}).json()[
+            "alerts"
+        ]
     ] == ["ZD-1"]
-    assert len(client.get("/api/v1/churn/alerts", params={"limit": 1}).json()["alerts"]) == 1
-    assert client.get("/api/v1/churn/alerts", params={"since_hours": 24 * 30}).json()["count_in_window"] == 3
-    assert client.get("/api/v1/churn/alerts", params={"min_score": 2}).status_code == 422
+    assert (
+        len(client.get("/api/v1/churn/alerts", params={"limit": 1}).json()["alerts"])
+        == 1
+    )
+    assert (
+        client.get("/api/v1/churn/alerts", params={"since_hours": 24 * 30}).json()[
+            "count_in_window"
+        ]
+        == 3
+    )
+    assert (
+        client.get("/api/v1/churn/alerts", params={"min_score": 2}).status_code == 422
+    )
     # alerts still list when the Golden Record has not been synced yet (email is simply unknown)
     no_golden, _ = make_client(with_dashboard_tables=False)
     alerts = no_golden.get("/api/v1/churn/alerts").json()["alerts"]
@@ -395,18 +551,38 @@ def test_existing_endpoints_unchanged(make_client):
     assert client.get("/api/v1/health").json()["services"]["api"] == "UP"
     assert client.get("/").json()["documentation"] == "/docs"
     ok = client.post(
-        "/api/v1/checkout", json={"item_id": "SKU-B", "quantity": 1, "user_session_id": "s", "user_id": "user_000005"}
+        "/api/v1/checkout",
+        json={
+            "item_id": "SKU-B",
+            "quantity": 1,
+            "user_session_id": "s",
+            "user_id": "user_000005",
+        },
     )
-    assert ok.status_code == 200 and ok.json()["precomputed_return_risk_level"] == 5  # reads the same cache
     assert (
-        client.post("/api/v1/checkout", json={"item_id": "SKU-A", "quantity": 2, "user_session_id": "s"}).status_code
+        ok.status_code == 200 and ok.json()["precomputed_return_risk_level"] == 5
+    )  # reads the same cache
+    assert (
+        client.post(
+            "/api/v1/checkout",
+            json={"item_id": "SKU-A", "quantity": 2, "user_session_id": "s"},
+        ).status_code
         == 409
     )
     assert (
-        client.post("/api/v1/checkout", json={"item_id": "NOPE", "quantity": 1, "user_session_id": "s"}).status_code
+        client.post(
+            "/api/v1/checkout",
+            json={"item_id": "NOPE", "quantity": 1, "user_session_id": "s"},
+        ).status_code
         == 404
     )
-    with patch("backend.celery_app.process_zendesk_ticket_task.apply_async", return_value=MagicMock(id="t-1")):
-        accepted = client.post("/api/v1/webhooks/zendesk", json={"ticket_id": "T", "subject": "s", "description": "d"})
+    with patch(
+        "backend.celery_app.process_zendesk_ticket_task.apply_async",
+        return_value=MagicMock(id="t-1"),
+    ):
+        accepted = client.post(
+            "/api/v1/webhooks/zendesk",
+            json={"ticket_id": "T", "subject": "s", "description": "d"},
+        )
     assert accepted.status_code == 202 and accepted.json()["task_id"] == "t-1"
     assert client.post("/api/v1/webhooks/zendesk", json={}).status_code == 422

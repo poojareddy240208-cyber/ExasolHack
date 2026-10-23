@@ -161,7 +161,10 @@ class TestBucketFSUploader:
 
         assert result["success"] is True
         assert result["files_count"] == 5  # 4 model files + 1 archive
-        assert result["mounted_container_path"] == f"/buckets/{settings.EXASOL_BUCKETFS_SERVICE}/models/test-churn"
+        assert (
+            result["mounted_container_path"]
+            == f"/buckets/{settings.EXASOL_BUCKETFS_SERVICE}/models/test-churn"
+        )
 
 
 # ==============================================================================
@@ -178,7 +181,9 @@ class TestExasolChurnUDF:
             "CREATE OR REPLACE PYTHON3 SCALAR SCRIPT OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE(cleaned_text VARCHAR(4000))"
             in sql
         )
-        assert "RETURNS DOUBLE AS" in sql  # a scalar function: callable in a SELECT list with other columns
+        assert (
+            "RETURNS VARCHAR(2000) AS" in sql
+        )  # a scalar function returning structured JSON
 
     def test_get_churn_udf_sql_uses_global_worker_cache(self):
         sql = get_churn_udf_sql()
@@ -196,8 +201,8 @@ class TestExasolChurnUDF:
     def test_get_churn_udf_sql_fallback_on_null_and_error(self):
         sql = get_churn_udf_sql()
 
-        # Must safely return 0.0 for empty text or errors
-        assert "return 0.0" in sql
+        # Must safely return JSON fallback for empty text or errors
+        assert '{"sentiment": 0.0, "urgency": 0.0, "root_cause": "NONE"}' in sql
         assert "ctx.emit" not in sql
 
     def test_register_churn_udf_executes_on_connection(self):
@@ -209,8 +214,11 @@ class TestExasolChurnUDF:
         assert CREATE_SCHEMA_QUERY in executed_statements
 
         udf_statement = executed_statements[1]
-        assert "CREATE OR REPLACE PYTHON3 SCALAR SCRIPT OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE" in udf_statement
-        assert "RETURNS DOUBLE AS" in udf_statement
+        assert (
+            "CREATE OR REPLACE PYTHON3 SCALAR SCRIPT OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE"
+            in udf_statement
+        )
+        assert "RETURNS VARCHAR(2000) AS" in udf_statement
         assert "EMITS" not in udf_statement
 
     def test_predict_churn_score_offline(self):

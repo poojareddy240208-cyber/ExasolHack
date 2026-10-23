@@ -133,6 +133,24 @@ CREATE TABLE IF NOT EXISTS IDENTITY_LABELS (
     CLUSTER_LABEL VARCHAR(100) NOT NULL
 );
 
+-- Identity evidence tracking events contributing to golden identity resolution
+CREATE TABLE IF NOT EXISTS IDENTITY_EVIDENCE (
+    SOURCE_ID           VARCHAR(255) NOT NULL,
+    EVENT_TYPE          VARCHAR(64) NOT NULL,
+    CONFIDENCE_WEIGHT   DECIMAL(5, 4) NOT NULL,
+    LINKED_TO_GOLDEN_ID VARCHAR(64),
+    CREATED_AT          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Candidate pairwise links awaiting probabilistic merge or human operator review
+CREATE TABLE IF NOT EXISTS CANDIDATE_LINKS (
+    NODE_A              VARCHAR(100) NOT NULL,
+    NODE_B              VARCHAR(100) NOT NULL,
+    MODEL_SCORE         DECIMAL(5, 4) NOT NULL,
+    HUMAN_REVIEW_STATUS VARCHAR(32) DEFAULT 'PENDING',
+    CREATED_AT          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- -----------------------------------------------------------------------------
 -- OUTPUT layer (exported to PostgreSQL by Celery Beat)
 -- -----------------------------------------------------------------------------

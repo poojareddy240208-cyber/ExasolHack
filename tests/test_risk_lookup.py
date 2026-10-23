@@ -20,7 +20,11 @@ from backend.models.inventory import Inventory
 from backend.services.cart_tracker import get_cart_tracker
 from backend.services.risk_lookup import DEFAULT_RISK_LEVEL, get_return_risk_level
 
-engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+engine = create_engine(
+    "sqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
 SessionForTests = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 CREATE_CACHE = "CREATE TABLE user_risk_cache (user_id TEXT PRIMARY KEY, risk_level INTEGER NOT NULL)"
@@ -40,9 +44,13 @@ def db():
 
 
 def _seed_cache(db, rows):
+    db.execute(text("DROP TABLE IF EXISTS user_risk_cache"))
     db.execute(text(CREATE_CACHE))
     for user_id, level in rows.items():
-        db.execute(text("INSERT INTO user_risk_cache VALUES (:u, :l)"), {"u": user_id, "l": level})
+        db.execute(
+            text("INSERT INTO user_risk_cache VALUES (:u, :l)"),
+            {"u": user_id, "l": level},
+        )
     db.commit()
 
 
@@ -74,7 +82,15 @@ def test_out_of_range_values_are_clamped(db):
 def test_checkout_returns_level_from_cache(db):
     """End to end: the checkout response carries the level read from user_risk_cache."""
     _seed_cache(db, {"user_serial": 5})
-    db.add(Inventory(item_id="SKU-TEST", name="Test item", stock=10, version=1, virtual_safety_buffer=0))
+    db.add(
+        Inventory(
+            item_id="SKU-TEST",
+            name="Test item",
+            stock=10,
+            version=1,
+            virtual_safety_buffer=0,
+        )
+    )
     db.commit()
 
     def override_get_db():
@@ -86,14 +102,30 @@ def test_checkout_returns_level_from_cache(db):
         with TestClient(app) as client:
             flagged = client.post(
                 "/api/v1/checkout",
-                json={"item_id": "SKU-TEST", "quantity": 1, "user_session_id": "sess_1", "user_id": "user_serial"},
+                json={
+                    "item_id": "SKU-TEST",
+                    "quantity": 1,
+                    "user_session_id": "sess_1",
+                    "user_id": "user_serial",
+                },
             )
             new_shopper = client.post(
                 "/api/v1/checkout",
-                json={"item_id": "SKU-TEST", "quantity": 1, "user_session_id": "sess_2", "user_id": "user_new"},
+                json={
+                    "item_id": "SKU-TEST",
+                    "quantity": 1,
+                    "user_session_id": "sess_2",
+                    "user_id": "user_new",
+                },
             )
     finally:
         app.dependency_overrides.clear()
 
-    assert flagged.status_code == 200 and flagged.json()["precomputed_return_risk_level"] == 5
-    assert new_shopper.status_code == 200 and new_shopper.json()["precomputed_return_risk_level"] == 1
+    assert (
+        flagged.status_code == 200
+        and flagged.json()["precomputed_return_risk_level"] == 5
+    )
+    assert (
+        new_shopper.status_code == 200
+        and new_shopper.json()["precomputed_return_risk_level"] == 1
+    )

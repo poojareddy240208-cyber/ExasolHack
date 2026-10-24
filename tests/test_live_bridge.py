@@ -273,10 +273,7 @@ def test_get_identity_investigation_success():
     with patch("requests.Session.get", return_value=mock_resp) as mock_get:
         result = get_identity_investigation(customer_id)
         mock_get.assert_called_once()
-        assert (
-            mock_get.call_args[0][0]
-            == "http://api:8000/api/v1/golden-customers/CUST-GOLDEN-001/investigation"
-        )
+        assert mock_get.call_args[0][0] == "http://api:8000/api/v1/golden-customers/CUST-GOLDEN-001/investigation"
         assert result["golden_customer_id"] == customer_id
         assert result["confidence_score"] == 0.98
         assert len(result["stitched_identities"]) == 2

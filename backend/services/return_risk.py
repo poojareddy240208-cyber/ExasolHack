@@ -19,13 +19,7 @@ from backend.services.exasol_client import connect_exasol, load_sql_statements
 
 logger = logging.getLogger("omnisync.return_risk")
 
-SQL_FILE = (
-    Path(__file__).resolve().parent.parent.parent
-    / "sql"
-    / "exasol"
-    / "return_risk"
-    / "10_serial_returner.sql"
-)
+SQL_FILE = Path(__file__).resolve().parent.parent.parent / "sql" / "exasol" / "return_risk" / "10_serial_returner.sql"
 SCHEMA = "OMNISYNC_ANALYTICS"
 
 # Level 1, 3 and 5 bands come from the PRD (<10%, 25-40%, >60%). Levels 2 and 4 fill the gaps and
@@ -82,11 +76,7 @@ def evaluate_user_return_risk_xai(user_id: str, db) -> Dict[str, Any]:
             db.query(SalesLedger)
             .filter(
                 (SalesLedger.user_id.in_(normalized_ids))
-                | (
-                    func.lower(SalesLedger.user_id).in_(
-                        [i.lower() for i in normalized_ids]
-                    )
-                )
+                | (func.lower(SalesLedger.user_id).in_([i.lower() for i in normalized_ids]))
             )
             .all()
         )
@@ -97,25 +87,12 @@ def evaluate_user_return_risk_xai(user_id: str, db) -> Dict[str, Any]:
     total_returns = len(return_records)
 
     defective_count = sum(
-        1
-        for r in return_records
-        if r.return_reason_code
-        in ("DEFECTIVE_BATCH", "STORE_ERROR", "WRONG_ITEM_SHIPPED")
+        1 for r in return_records if r.return_reason_code in ("DEFECTIVE_BATCH", "STORE_ERROR", "WRONG_ITEM_SHIPPED")
     )
-    discretionary_count = sum(
-        1
-        for r in return_records
-        if r.return_reason_code in ("CHANGED_MIND", "WRONG_SIZE")
-    )
-    abuse_count = sum(
-        1
-        for r in return_records
-        if r.return_reason_code in ("WARDROBING_SUSPECTED", "SUSPECTED_ABUSE")
-    )
+    discretionary_count = sum(1 for r in return_records if r.return_reason_code in ("CHANGED_MIND", "WRONG_SIZE"))
+    abuse_count = sum(1 for r in return_records if r.return_reason_code in ("WARDROBING_SUSPECTED", "SUSPECTED_ABUSE"))
 
-    weighted_returns = sum(
-        CONTEXT_PENALTY_WEIGHTS.get(r.return_reason_code, 1.0) for r in return_records
-    )
+    weighted_returns = sum(CONTEXT_PENALTY_WEIGHTS.get(r.return_reason_code, 1.0) for r in return_records)
 
     cache_row = None
     try:
@@ -150,9 +127,7 @@ def evaluate_user_return_risk_xai(user_id: str, db) -> Dict[str, Any]:
                     staleness_warning = True
 
     if total_returns > 0:
-        if abuse_count > 0 and (
-            abuse_count >= 2 or abuse_count == total_returns or weighted_returns >= 6.0
-        ):
+        if abuse_count > 0 and (abuse_count >= 2 or abuse_count == total_returns or weighted_returns >= 6.0):
             risk_level = 5
             human_review_required = True
             abuse_pct = round((abuse_count / total_returns) * 100)
@@ -160,15 +135,12 @@ def evaluate_user_return_risk_xai(user_id: str, db) -> Dict[str, Any]:
                 f"Elevated return risk: {abuse_pct}% of returns flagged for suspected wardrobing/abuse. "
                 "Human review required."
             )
-        elif defective_count > 0 and (
-            (defective_count / total_returns) >= 0.5 or defective_count >= 3
-        ):
+        elif defective_count > 0 and ((defective_count / total_returns) >= 0.5 or defective_count >= 3):
             risk_level = 1
             human_review_required = False
             defect_pct = round((defective_count / total_returns) * 100)
             xai_explanation = (
-                f"High return volume ignored: {defect_pct}% of returns linked to "
-                "verified supplier defect."
+                f"High return volume ignored: {defect_pct}% of returns linked to " "verified supplier defect."
             )
         elif weighted_returns >= 6.0:
             risk_level = 5
@@ -198,17 +170,21 @@ def evaluate_user_return_risk_xai(user_id: str, db) -> Dict[str, Any]:
         human_review_required = risk_level == 5
         rate_pct = round(float(cached_return_rate or 0) * 100, 1)
         if risk_level == 5:
-            xai_explanation = f"High historical return rate ({rate_pct}%) exceeds policy threshold (>60%). Human review required."
+            xai_explanation = (
+                f"High historical return rate ({rate_pct}%) exceeds policy threshold (>60%). Human review required."
+            )
         elif risk_level >= 3:
-            xai_explanation = f"Historical return rate ({rate_pct}%) within monitored return friction band (Level {risk_level})."
+            xai_explanation = (
+                f"Historical return rate ({rate_pct}%) within monitored return friction band (Level {risk_level})."
+            )
         else:
-            xai_explanation = f"Standard return behavior: return rate ({rate_pct}%) within acceptable normal operating bounds."
+            xai_explanation = (
+                f"Standard return behavior: return rate ({rate_pct}%) within acceptable normal operating bounds."
+            )
     else:
         risk_level = 1
         human_review_required = False
-        xai_explanation = (
-            "Standard return profile: no return history or verified defects on record."
-        )
+        xai_explanation = "Standard return profile: no return history or verified defects on record."
 
     return {
         "user_id": user_id,
@@ -224,9 +200,7 @@ def evaluate_user_return_risk_xai(user_id: str, db) -> Dict[str, Any]:
     }
 
 
-def run_return_risk_scoring(
-    host: Optional[str] = None, params: Optional[Dict[str, float]] = None
-) -> Dict[int, int]:
+def run_return_risk_scoring(host: Optional[str] = None, params: Optional[Dict[str, float]] = None) -> Dict[int, int]:
     """
     Recompute USER_RETURN_RISK from the raw purchase/return tables and the Golden Record.
 
@@ -241,17 +215,13 @@ def run_return_risk_scoring(
         params["LEVEL4_MAX"],
     ]
     if bounds != sorted(bounds) or not 0 < bounds[0] or bounds[-1] > 1:
-        raise ValueError(
-            f"Risk level bounds must be increasing and within (0, 1]: {bounds}"
-        )
+        raise ValueError(f"Risk level bounds must be increasing and within (0, 1]: {bounds}")
 
     conn = connect_exasol(host=host, schema=SCHEMA, autocommit=False)
     try:
         for statement in load_sql_statements(SQL_FILE, params):
             conn.execute(statement)
-        rows = conn.execute(
-            "SELECT RISK_LEVEL, COUNT(*) FROM USER_RETURN_RISK GROUP BY RISK_LEVEL"
-        ).fetchall()
+        rows = conn.execute("SELECT RISK_LEVEL, COUNT(*) FROM USER_RETURN_RISK GROUP BY RISK_LEVEL").fetchall()
         conn.commit()
     except Exception:
         conn.rollback()
@@ -265,9 +235,7 @@ def run_return_risk_scoring(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Recompute Return Risk Levels inside Exasol."
-    )
+    parser = argparse.ArgumentParser(description="Recompute Return Risk Levels inside Exasol.")
     parser.add_argument(
         "--localhost",
         action="store_true",

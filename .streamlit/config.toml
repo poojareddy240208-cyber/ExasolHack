@@ -1,0 +1,15 @@
+# OmniSync XAI dashboard theme (Ocean Depths). Streamlit reads this from the folder it is started in, so it applies
+# whatever light/dark mode the visitor's system uses. frontend/app.py adds the finer styling on top of it.
+[theme]
+base = "dark"
+primaryColor = "#2d8b8b"
+backgroundColor = "#1a2332"
+secondaryBackgroundColor = "#202c3f"
+textColor = "#f1faee"
+font = "sans serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false

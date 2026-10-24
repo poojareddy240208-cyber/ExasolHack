@@ -6,6 +6,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir streamlit pandas requests
 
 COPY frontend/ ./frontend/
+# Theme: Streamlit reads .streamlit/config.toml from the working directory
+COPY .streamlit ./.streamlit
 
 ENV PYTHONUNBUFFERED=1
 ENV STREAMLIT_SERVER_PORT=8501

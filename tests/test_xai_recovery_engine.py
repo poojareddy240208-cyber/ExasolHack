@@ -135,14 +135,8 @@ def test_action_engine_fulfillment_failure_critical_recommends_concierge():
         urgency="CRITICAL",
         sentiment=0.99,
     )
-    assert (
-        result["recommended_action"]
-        == "ESCALATE_HUMAN_CONCIERGE_AND_OVERNIGHT_REPLACEMENT"
-    )
-    assert (
-        "Critical urgency detected due to fulfillment failure"
-        in result["xai_explanation"]
-    )
+    assert result["recommended_action"] == "ESCALATE_HUMAN_CONCIERGE_AND_OVERNIGHT_REPLACEMENT"
+    assert "Critical urgency detected due to fulfillment failure" in result["xai_explanation"]
     assert "Human concierge escalation required" in result["xai_explanation"]
 
 
@@ -198,9 +192,7 @@ def test_approve_churn_alert_endpoint_success_and_idempotency(db_session):
 
         # Check in DB
         db_audit = (
-            db_session.query(RetentionCampaignAudit)
-            .filter(RetentionCampaignAudit.ticket_id == ticket_id)
-            .first()
+            db_session.query(RetentionCampaignAudit).filter(RetentionCampaignAudit.ticket_id == ticket_id).first()
         )
         assert db_audit.status == "ACTION_EXECUTED"
         assert db_audit.approved_by == "OpsLead_Sarah"
@@ -249,11 +241,7 @@ def test_seed_xai_demo_data_inserts_both_nlp_tickets(db_session, monkeypatch):
     bootstrap.seed_xai_demo_data()
 
     # Verify Ticket 1 (Fit Issue)
-    t1 = (
-        db_session.query(RetentionCampaignAudit)
-        .filter(RetentionCampaignAudit.ticket_id == "ZD-DEMO-FIT-001")
-        .first()
-    )
+    t1 = db_session.query(RetentionCampaignAudit).filter(RetentionCampaignAudit.ticket_id == "ZD-DEMO-FIT-001").first()
     assert t1 is not None
     assert t1.user_id == "DEMO-EVE-001"
     assert t1.churn_score == 0.30

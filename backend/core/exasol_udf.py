@@ -12,7 +12,9 @@ from typing import Optional
 from backend.core.config import settings
 
 # Default BucketFS mount path inside the Exasol container
-DEFAULT_BUCKETFS_MODEL_PATH = f"/buckets/{settings.EXASOL_BUCKETFS_SERVICE}/{settings.EXASOL_BUCKETFS_BUCKET}/distilbert-churn"
+DEFAULT_BUCKETFS_MODEL_PATH = (
+    f"/buckets/{settings.EXASOL_BUCKETFS_SERVICE}/{settings.EXASOL_BUCKETFS_BUCKET}/distilbert-churn"
+)
 
 
 def get_churn_udf_sql(bucketfs_model_path: Optional[str] = None) -> str:

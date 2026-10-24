@@ -26,9 +26,7 @@ class ReturnPolicy:
     customer_message: str
     restocking_fee_usd: float
     cash_on_delivery_allowed: bool
-    keep_it_discount_pct: (
-        int  # "Keep it for X% off" offer shown instead of a return; 0 = no offer
-    )
+    keep_it_discount_pct: int  # "Keep it for X% off" offer shown instead of a return; 0 = no offer
     human_review_required: bool = False
 
 

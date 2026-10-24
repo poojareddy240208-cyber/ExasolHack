@@ -51,16 +51,12 @@ def test_inventory_creation_and_defaults(db_session):
     assert saved_item.name == "NVIDIA GeForce RTX 5090"
     assert saved_item.stock == 25
     assert saved_item.version == 1, "OCC version must default to 1"
-    assert (
-        saved_item.virtual_safety_buffer == 0
-    ), "Virtual safety stock buffer must default to 0"
+    assert saved_item.virtual_safety_buffer == 0, "Virtual safety stock buffer must default to 0"
 
 
 def test_inventory_check_constraint_negative_stock(db_session):
     """Verifies that the CheckConstraint prevents negative physical stock."""
-    invalid_item = Inventory(
-        item_id="SKU-DEFECTIVE", name="Invalid Stock Item", stock=-5
-    )
+    invalid_item = Inventory(item_id="SKU-DEFECTIVE", name="Invalid Stock Item", stock=-5)
     db_session.add(invalid_item)
     with pytest.raises(IntegrityError):
         db_session.commit()
@@ -165,9 +161,7 @@ def test_inventory_reservation_creation_and_lifecycle(db_session):
     from backend.models.inventory import InventoryReservation
     from datetime import timedelta
 
-    item = Inventory(
-        item_id="SKU-HOLD-TEST", name="Hold Item", stock=20, reserved_stock=0
-    )
+    item = Inventory(item_id="SKU-HOLD-TEST", name="Hold Item", stock=20, reserved_stock=0)
     db_session.add(item)
     db_session.commit()
 
@@ -248,9 +242,7 @@ def test_release_expired_reservations_reaper(db_session):
     from backend.models.inventory import InventoryReservation
     from backend.services.inventory_manager import release_expired_reservations
 
-    item = Inventory(
-        item_id="SKU-EXPIRE-TEST", name="Expiring Item", stock=30, reserved_stock=10
-    )
+    item = Inventory(item_id="SKU-EXPIRE-TEST", name="Expiring Item", stock=30, reserved_stock=10)
     db_session.add(item)
     db_session.commit()
 

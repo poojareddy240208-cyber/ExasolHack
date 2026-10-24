@@ -81,9 +81,7 @@ def list_churn_alerts(
     except SQLAlchemyError as exc:
         db.rollback()
         logger.warning("Churn alert query failed: %s", exc)
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, detail=UNAVAILABLE_DETAIL
-        )
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=UNAVAILABLE_DETAIL)
 
     emails = _emails_for(db, sorted({row.user_id for row in rows}))
     alerts = [
@@ -126,11 +124,7 @@ def approve_churn_alert(
     body: ChurnActionApproveRequest,
     db: Session = Depends(get_db),
 ):
-    audit = (
-        db.query(RetentionCampaignAudit)
-        .filter(RetentionCampaignAudit.ticket_id == ticket_id)
-        .first()
-    )
+    audit = db.query(RetentionCampaignAudit).filter(RetentionCampaignAudit.ticket_id == ticket_id).first()
     if not audit:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

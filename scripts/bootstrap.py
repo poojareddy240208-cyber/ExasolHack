@@ -42,16 +42,8 @@ from scripts.apply_schemas import apply_exasol, apply_postgres
 logger = logging.getLogger("omnisync.bootstrap")
 
 UDF_FILES = [
-    Path(__file__).resolve().parent.parent
-    / "backend"
-    / "db"
-    / "exasol"
-    / "01_inventory_predict_udf.sql",
-    Path(__file__).resolve().parent.parent
-    / "backend"
-    / "db"
-    / "exasol"
-    / "02_nlp_churn_udf.sql",
+    Path(__file__).resolve().parent.parent / "backend" / "db" / "exasol" / "01_inventory_predict_udf.sql",
+    Path(__file__).resolve().parent.parent / "backend" / "db" / "exasol" / "02_nlp_churn_udf.sql",
 ]
 
 SEED_ITEMS = [
@@ -68,12 +60,7 @@ def seed_inventory() -> int:
         if db.query(Inventory).count() > 0:
             logger.info("Inventory already has rows, skipping seed.")
             return 0
-        db.add_all(
-            [
-                Inventory(version=1, virtual_safety_buffer=0, **item)
-                for item in SEED_ITEMS
-            ]
-        )
+        db.add_all([Inventory(version=1, virtual_safety_buffer=0, **item) for item in SEED_ITEMS])
         db.commit()
         logger.info("Seeded %d inventory items.", len(SEED_ITEMS))
         return len(SEED_ITEMS)
@@ -84,10 +71,7 @@ def seed_inventory() -> int:
 def udf_statements(sql_path: Path) -> List[str]:
     """Extract the `--/ ... /` script blocks (CREATE ... SCRIPT) from an Exasol SQL file, without the markers."""
     text = sql_path.read_text(encoding="utf-8")
-    return [
-        block.strip()
-        for block in re.findall(r"^--/\s*\n(.*?)^/\s*$", text, flags=re.S | re.M)
-    ]
+    return [block.strip() for block in re.findall(r"^--/\s*\n(.*?)^/\s*$", text, flags=re.S | re.M)]
 
 
 def setup_exasol(host: Optional[str]) -> None:
@@ -174,11 +158,7 @@ def seed_xai_demo_data() -> None:
         # -------------------------------------------------------------
         # 1. Return Scenarios: Customer A & Customer B
         # -------------------------------------------------------------
-        cust_a_count = (
-            db.query(SalesLedger)
-            .filter(SalesLedger.user_id.in_(["Customer A", "customer_a"]))
-            .count()
-        )
+        cust_a_count = db.query(SalesLedger).filter(SalesLedger.user_id.in_(["Customer A", "customer_a"])).count()
         if cust_a_count == 0:
             demo_item = "SKU-AIR-JORDAN"
             for i in range(5):
@@ -204,15 +184,9 @@ def seed_xai_demo_data() -> None:
                     supplier_batch_id=None,
                 )
             )
-            logger.info(
-                "Seeded Customer A (Unlucky VIP) with 6 returns (5 DEFECTIVE_BATCH BATCH-8992)."
-            )
+            logger.info("Seeded Customer A (Unlucky VIP) with 6 returns (5 DEFECTIVE_BATCH BATCH-8992).")
 
-        cust_b_count = (
-            db.query(SalesLedger)
-            .filter(SalesLedger.user_id.in_(["Customer B", "customer_b"]))
-            .count()
-        )
+        cust_b_count = db.query(SalesLedger).filter(SalesLedger.user_id.in_(["Customer B", "customer_b"])).count()
         if cust_b_count == 0:
             demo_item = "SKU-HERMES-BAG"
             for i in range(4):
@@ -227,9 +201,7 @@ def seed_xai_demo_data() -> None:
                         supplier_batch_id=None,
                     )
                 )
-            logger.info(
-                "Seeded Customer B (Wardrober) with 4 returns (WARDROBING_SUSPECTED)."
-            )
+            logger.info("Seeded Customer B (Wardrober) with 4 returns (WARDROBING_SUSPECTED).")
 
         db.commit()
 
@@ -268,9 +240,7 @@ def seed_xai_demo_data() -> None:
         # -------------------------------------------------------------
         eve_golden_id = "DEMO-EVE-001"
         existing_eve = db.execute(
-            text(
-                "SELECT golden_customer_id FROM golden_customers WHERE golden_customer_id = :id"
-            ),
+            text("SELECT golden_customer_id FROM golden_customers WHERE golden_customer_id = :id"),
             {"id": eve_golden_id},
         ).fetchone()
 
@@ -360,9 +330,7 @@ def seed_xai_demo_data() -> None:
 
         # Seed identity_evidence for DEMO-EVE-001
         existing_evidence = db.execute(
-            text(
-                "SELECT source_id FROM identity_evidence WHERE linked_to_golden_id = :id"
-            ),
+            text("SELECT source_id FROM identity_evidence WHERE linked_to_golden_id = :id"),
             {"id": eve_golden_id},
         ).fetchone()
         if not existing_evidence:
@@ -440,11 +408,7 @@ def seed_xai_demo_data() -> None:
             pass
 
         ticket_1_id = "ZD-DEMO-FIT-001"
-        existing_t1 = (
-            db.query(RetentionCampaignAudit)
-            .filter(RetentionCampaignAudit.ticket_id == ticket_1_id)
-            .first()
-        )
+        existing_t1 = db.query(RetentionCampaignAudit).filter(RetentionCampaignAudit.ticket_id == ticket_1_id).first()
         if not existing_t1:
             db.add(
                 RetentionCampaignAudit(
@@ -463,11 +427,7 @@ def seed_xai_demo_data() -> None:
             )
 
         ticket_2_id = "ZD-DEMO-WEDDING-002"
-        existing_t2 = (
-            db.query(RetentionCampaignAudit)
-            .filter(RetentionCampaignAudit.ticket_id == ticket_2_id)
-            .first()
-        )
+        existing_t2 = db.query(RetentionCampaignAudit).filter(RetentionCampaignAudit.ticket_id == ticket_2_id).first()
         if not existing_t2:
             db.add(
                 RetentionCampaignAudit(

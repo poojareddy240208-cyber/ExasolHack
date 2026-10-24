@@ -121,11 +121,5 @@ def test_checkout_returns_level_from_cache(db):
     finally:
         app.dependency_overrides.clear()
 
-    assert (
-        flagged.status_code == 200
-        and flagged.json()["precomputed_return_risk_level"] == 5
-    )
-    assert (
-        new_shopper.status_code == 200
-        and new_shopper.json()["precomputed_return_risk_level"] == 1
-    )
+    assert flagged.status_code == 200 and flagged.json()["precomputed_return_risk_level"] == 5
+    assert new_shopper.status_code == 200 and new_shopper.json()["precomputed_return_risk_level"] == 1

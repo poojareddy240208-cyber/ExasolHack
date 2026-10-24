@@ -45,18 +45,10 @@ def release_expired_reservations(db: Session) -> int:
             released_count = 0
             for reservation in expired_reservations:
                 reservation.status = "EXPIRED"
-                item = (
-                    db.query(Inventory)
-                    .filter(Inventory.item_id == reservation.item_id)
-                    .first()
-                )
+                item = db.query(Inventory).filter(Inventory.item_id == reservation.item_id).first()
                 if item:
-                    current_reserved = (
-                        item.reserved_stock if item.reserved_stock is not None else 0
-                    )
-                    item.reserved_stock = max(
-                        0, current_reserved - reservation.quantity
-                    )
+                    current_reserved = item.reserved_stock if item.reserved_stock is not None else 0
+                    item.reserved_stock = max(0, current_reserved - reservation.quantity)
                     logger.debug(
                         f"Released reservation {reservation.id} for item {item.item_id}: "
                         f"restored {reservation.quantity} units (new reserved_stock={item.reserved_stock})"
@@ -65,13 +57,9 @@ def release_expired_reservations(db: Session) -> int:
 
         db.commit()
         if released_count > 0:
-            logger.info(
-                f"Reaper released {released_count} expired inventory reservations."
-            )
+            logger.info(f"Reaper released {released_count} expired inventory reservations.")
         return released_count
     except Exception as exc:
         db.rollback()
-        logger.error(
-            f"Error executing release_expired_reservations: {exc}", exc_info=True
-        )
+        logger.error(f"Error executing release_expired_reservations: {exc}", exc_info=True)
         raise

@@ -89,9 +89,7 @@ def build_return_risk(db: Session, user_id: str) -> ReturnRiskResponse:
         risk_level=level,
         return_rate=float(row[1]) if row[1] is not None else None,
         purchases_6m=row[2],
-        returns_6m=(
-            xai_eval["total_returns"] if xai_eval["total_returns"] > 0 else row[3]
-        ),
+        returns_6m=(xai_eval["total_returns"] if xai_eval["total_returns"] > 0 else row[3]),
         golden_customer_id=row[4],
         computed_at=row[5],
         synced_at=row[6],

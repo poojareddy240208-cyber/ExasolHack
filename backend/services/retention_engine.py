@@ -160,29 +160,17 @@ def parse_nlp_udf_output(raw_output: Any) -> Dict[str, Any]:
         urgency = (
             "CRITICAL"
             if sentiment >= 0.9
-            else (
-                "HIGH"
-                if sentiment >= 0.75
-                else ("MEDIUM" if sentiment >= 0.5 else "LOW")
-            )
+            else ("HIGH" if sentiment >= 0.75 else ("MEDIUM" if sentiment >= 0.5 else "LOW"))
         )
-        root_cause = (
-            "FULFILLMENT_FAILURE" if sentiment >= 0.85 else "PRODUCT_PREFERENCE"
-        )
+        root_cause = "FULFILLMENT_FAILURE" if sentiment >= 0.85 else "PRODUCT_PREFERENCE"
     elif isinstance(raw_output, dict):
-        sentiment = float(
-            raw_output.get("sentiment", raw_output.get("churn_score", 0.0))
-        )
+        sentiment = float(raw_output.get("sentiment", raw_output.get("churn_score", 0.0)))
         raw_urg = raw_output.get("urgency", "MEDIUM")
         if isinstance(raw_urg, (int, float)):
             urgency = (
                 "CRITICAL"
                 if raw_urg >= 0.9
-                else (
-                    "HIGH"
-                    if raw_urg >= 0.75
-                    else ("MEDIUM" if raw_urg >= 0.5 else "LOW")
-                )
+                else ("HIGH" if raw_urg >= 0.75 else ("MEDIUM" if raw_urg >= 0.5 else "LOW"))
             )
         else:
             urgency = str(raw_urg).upper()
@@ -191,19 +179,13 @@ def parse_nlp_udf_output(raw_output: Any) -> Dict[str, Any]:
         try:
             parsed = json.loads(raw_output)
             if isinstance(parsed, dict):
-                sentiment = float(
-                    parsed.get("sentiment", parsed.get("churn_score", 0.0))
-                )
+                sentiment = float(parsed.get("sentiment", parsed.get("churn_score", 0.0)))
                 raw_urg = parsed.get("urgency", "MEDIUM")
                 if isinstance(raw_urg, (int, float)):
                     urgency = (
                         "CRITICAL"
                         if raw_urg >= 0.9
-                        else (
-                            "HIGH"
-                            if raw_urg >= 0.75
-                            else ("MEDIUM" if raw_urg >= 0.5 else "LOW")
-                        )
+                        else ("HIGH" if raw_urg >= 0.75 else ("MEDIUM" if raw_urg >= 0.5 else "LOW"))
                     )
                 else:
                     urgency = str(raw_urg).upper()
@@ -211,16 +193,12 @@ def parse_nlp_udf_output(raw_output: Any) -> Dict[str, Any]:
             else:
                 sentiment = float(parsed)
                 urgency = "CRITICAL" if sentiment >= 0.9 else "MEDIUM"
-                root_cause = (
-                    "FULFILLMENT_FAILURE" if sentiment >= 0.85 else "PRODUCT_PREFERENCE"
-                )
+                root_cause = "FULFILLMENT_FAILURE" if sentiment >= 0.85 else "PRODUCT_PREFERENCE"
         except Exception:
             try:
                 sentiment = float(raw_output)
                 urgency = "CRITICAL" if sentiment >= 0.9 else "MEDIUM"
-                root_cause = (
-                    "FULFILLMENT_FAILURE" if sentiment >= 0.85 else "PRODUCT_PREFERENCE"
-                )
+                root_cause = "FULFILLMENT_FAILURE" if sentiment >= 0.85 else "PRODUCT_PREFERENCE"
             except Exception:
                 sentiment = 0.0
                 urgency = "LOW"
@@ -231,11 +209,7 @@ def parse_nlp_udf_output(raw_output: Any) -> Dict[str, Any]:
         urgency = (
             "CRITICAL"
             if sentiment >= 0.9
-            else (
-                "HIGH"
-                if sentiment >= 0.75
-                else ("MEDIUM" if sentiment >= 0.5 else "LOW")
-            )
+            else ("HIGH" if sentiment >= 0.75 else ("MEDIUM" if sentiment >= 0.5 else "LOW"))
         )
 
     valid_causes = {"FULFILLMENT_FAILURE", "PRODUCT_PREFERENCE", "BILLING_ERROR"}
@@ -292,8 +266,7 @@ def evaluate_retention_action(
     elif rc == "BILLING_ERROR":
         action = "AUTO_REFUND_AND_10_PCT_APOLOGY"
         explanation = (
-            "Billing discrepancy or charge error detected. "
-            "Automated full refund and 10% apology coupon recommended."
+            "Billing discrepancy or charge error detected. " "Automated full refund and 10% apology coupon recommended."
         )
     else:
         if urg == "CRITICAL":
@@ -332,9 +305,7 @@ def run_retention_vip_join(
         List of identified VIP churn risk records with parsed NLP intelligence and recommended actions.
     """
     sql = get_golden_retention_join_sql(churn_threshold, ltv_percentile)
-    logger.info(
-        f"[retention] Executing Exasol Golden JOIN (Churn >= {churn_threshold}, LTV >= {ltv_percentile})..."
-    )
+    logger.info(f"[retention] Executing Exasol Golden JOIN (Churn >= {churn_threshold}, LTV >= {ltv_percentile})...")
 
     conn = connect_exasol(host=host, schema="OMNISYNC_ANALYTICS")
     try:
@@ -356,9 +327,7 @@ def run_retention_vip_join(
             )
             recommended_action = action_eval["recommended_action"]
             xai_explanation = action_eval["xai_explanation"]
-            action_triggered = (
-                str(row[7]) if len(row) > 7 and row[7] else recommended_action
-            )
+            action_triggered = str(row[7]) if len(row) > 7 and row[7] else recommended_action
 
             record = {
                 "ticket_id": str(row[0]),
@@ -377,9 +346,7 @@ def run_retention_vip_join(
             }
             records.append(record)
 
-        logger.info(
-            f"[retention] Golden JOIN identified {len(records)} VIP churn risks."
-        )
+        logger.info(f"[retention] Golden JOIN identified {len(records)} VIP churn risks.")
 
         # If a PostgreSQL session is provided, audit each NEW intervention. The join re-evaluates every staged
         # ticket on each run, so tickets that already have a campaign are skipped (no duplicate campaigns).
@@ -391,9 +358,7 @@ def run_retention_vip_join(
                 .filter(RetentionCampaignAudit.ticket_id.in_(ticket_ids))
                 .all()
             }
-            new_records = [
-                rec for rec in records if rec["ticket_id"] not in already_audited
-            ]
+            new_records = [rec for rec in records if rec["ticket_id"] not in already_audited]
             for rec in new_records:
                 db_session.add(
                     RetentionCampaignAudit(

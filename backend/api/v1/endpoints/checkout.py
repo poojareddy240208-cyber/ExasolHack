@@ -75,12 +75,7 @@ def process_checkout(
         # Strict transaction management using a nested savepoint
         with db.begin_nested():
             # 1. Fetch current Inventory record (with row lock if supported)
-            item = (
-                db.query(Inventory)
-                .filter(Inventory.item_id == request.item_id)
-                .with_for_update()
-                .first()
-            )
+            item = db.query(Inventory).filter(Inventory.item_id == request.item_id).with_for_update().first()
             if not item:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -88,10 +83,7 @@ def process_checkout(
                 )
 
             # 2. OCC Version Conflict Guard
-            if (
-                request.expected_version is not None
-                and request.expected_version != item.version
-            ):
+            if request.expected_version is not None and request.expected_version != item.version:
                 logger.warning(
                     f"OCC conflict on {request.item_id}: expected version {request.expected_version}, actual {item.version}."
                 )
@@ -106,9 +98,7 @@ def process_checkout(
 
             # Predictive safety buffer surge check:
             # Rejects if quantity exceeds stock net of virtual safety buffer
-            if item.virtual_safety_buffer and request.quantity > (
-                available_stock - item.virtual_safety_buffer
-            ):
+            if item.virtual_safety_buffer and request.quantity > (available_stock - item.virtual_safety_buffer):
                 logger.warning(
                     f"Predictive safety failsafe triggered for {request.item_id}: "
                     f"requested={request.quantity}, physical={item.physical_stock}, reserved={reserved}, "
@@ -200,13 +190,9 @@ def process_checkout(
     # 7. Cart Cleanup in Redis (best-effort, outside DB transaction)
     try:
         cart_tracker.remove_from_cart(request.item_id, request.user_session_id)
-        logger.debug(
-            f"Removed session {request.user_session_id} from cart:{request.item_id}"
-        )
+        logger.debug(f"Removed session {request.user_session_id} from cart:{request.item_id}")
     except Exception as e:
-        logger.warning(
-            f"Could not remove session from Redis cart (broker offline or testing mode): {e}"
-        )
+        logger.warning(f"Could not remove session from Redis cart (broker offline or testing mode): {e}")
 
     # 8. Pre-computed return risk level lookup (0ms warehouse latency PK read)
     user_risk_level = get_return_risk_level(db, effective_user_id)

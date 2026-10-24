@@ -104,22 +104,14 @@ def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[st
         Structured result summary including status, ticket_id, and staging details.
     """
     if not isinstance(ticket_payload, dict):
-        logger.error(
-            f"[Celery] Invalid ticket payload type received: {type(ticket_payload)}"
-        )
-        raise ValueError(
-            f"Expected dict for ticket_payload, received {type(ticket_payload).__name__}"
-        )
+        logger.error(f"[Celery] Invalid ticket payload type received: {type(ticket_payload)}")
+        raise ValueError(f"Expected dict for ticket_payload, received {type(ticket_payload).__name__}")
 
     # Extract ticket_id from direct keys or nested ticket structure
     ticket_id = (
         ticket_payload.get("ticket_id")
         or ticket_payload.get("id")
-        or (
-            ticket_payload.get("ticket", {}).get("id")
-            if isinstance(ticket_payload.get("ticket"), dict)
-            else None
-        )
+        or (ticket_payload.get("ticket", {}).get("id") if isinstance(ticket_payload.get("ticket"), dict) else None)
     )
     if not ticket_id:
         logger.error(f"[Celery] Missing ticket_id in payload: {ticket_payload}")
@@ -137,11 +129,7 @@ def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[st
             if isinstance(ticket_payload.get("ticket"), dict)
             else None
         )
-        or (
-            ticket_payload.get("ticket", {}).get("user_id")
-            if isinstance(ticket_payload.get("ticket"), dict)
-            else None
-        )
+        or (ticket_payload.get("ticket", {}).get("user_id") if isinstance(ticket_payload.get("ticket"), dict) else None)
     )
     user_id = str(user_id).strip() if user_id is not None else None
 
@@ -159,11 +147,7 @@ def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[st
         description_text = str(description_text)
 
     # If top-level text is empty, check nested ticket structure
-    if (
-        not comment_text
-        and not description_text
-        and isinstance(ticket_payload.get("ticket"), dict)
-    ):
+    if not comment_text and not description_text and isinstance(ticket_payload.get("ticket"), dict):
         nested_ticket = ticket_payload["ticket"]
         nested_comment = nested_ticket.get("comment")
         if isinstance(nested_comment, dict):
@@ -181,9 +165,7 @@ def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[st
 
     # Extract and normalize timestamp
     created_at_raw = ticket_payload.get("created_at") or (
-        ticket_payload.get("ticket", {}).get("created_at")
-        if isinstance(ticket_payload.get("ticket"), dict)
-        else None
+        ticket_payload.get("ticket", {}).get("created_at") if isinstance(ticket_payload.get("ticket"), dict) else None
     )
     created_at = normalize_timestamp(created_at_raw)
 
@@ -228,9 +210,7 @@ def process_zendesk_ticket_task(self, ticket_payload: Dict[str, Any]) -> Dict[st
 
 
 # Register alias under fully-qualified name for backwards compatibility
-celery.tasks["backend.celery_app.process_zendesk_ticket_task"] = (
-    process_zendesk_ticket_task
-)
+celery.tasks["backend.celery_app.process_zendesk_ticket_task"] = process_zendesk_ticket_task
 
 
 @celery.task(bind=True, name="backend.celery_app.trigger_exasol_inventory_sync")
@@ -245,9 +225,7 @@ def trigger_exasol_inventory_sync(self):
         sync_inventory_buffer_to_postgres,
     )
 
-    logger.info(
-        "[Celery Beat] Refreshing inventory telemetry and syncing virtual safety buffer..."
-    )
+    logger.info("[Celery Beat] Refreshing inventory telemetry and syncing virtual safety buffer...")
     telemetry = refresh_inventory_telemetry()
     return {
         **sync_inventory_buffer_to_postgres(),
@@ -293,9 +271,7 @@ def trigger_exasol_return_risk_sync(self):
 
     logger.info("[Celery Beat] Recomputing Return Risk Levels in Exasol...")
     risk_counts = run_return_risk_scoring()
-    logger.info(
-        "[Celery Beat] Exporting Module 3 metrics Exasol -> Postgres via EXPORT INTO JDBC..."
-    )
+    logger.info("[Celery Beat] Exporting Module 3 metrics Exasol -> Postgres via EXPORT INTO JDBC...")
     sync_result = sync_module3_to_postgres()
     return {
         "target": "POSTGRES_USER_RISK_CACHE",

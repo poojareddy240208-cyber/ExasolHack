@@ -28,7 +28,9 @@ from backend.services.identity_stitching import generate_identity_investigation
 
 router = APIRouter()
 
-_SUMMARY_COLUMNS = "gc.golden_customer_id, gc.primary_email, gc.member_count, gc.total_spend_usd, gc.first_seen_at, gc.last_seen_at"
+_SUMMARY_COLUMNS = (
+    "gc.golden_customer_id, gc.primary_email, gc.member_count, gc.total_spend_usd, gc.first_seen_at, gc.last_seen_at"
+)
 
 
 def _summary(db: Session, row) -> GoldenCustomerSummary:
@@ -140,12 +142,7 @@ def get_golden_customer(golden_customer_id: str, db: Session = Depends(get_db)):
         "WHERE golden_customer_id = :id ORDER BY confidence DESC, node_id",
         {"id": golden_customer_id},
     )
-    members = [
-        GoldenMember(
-            node_id=r[0], node_type=r[1], source_id=r[2], confidence=float(r[3])
-        )
-        for r in member_rows
-    ]
+    members = [GoldenMember(node_id=r[0], node_type=r[1], source_id=r[2], confidence=float(r[3])) for r in member_rows]
 
     # The risk level is per golden customer, so any Shopify account or guest device of the customer carries it.
     risk = None

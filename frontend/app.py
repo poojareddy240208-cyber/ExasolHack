@@ -208,13 +208,26 @@ def show_checkout_result(flash: Dict[str, Any]) -> None:
         st.error("Cannot reach the backend. Check that the API container is running, then try again.")
     else:
         st.error(f"The order failed: {error_message(result)}")
-
+def _trigger_surge_burst(sku: str) -> Dict[str, Any]:
+    """Call the surge bridge while supporting the app's existing count keyword."""
+    try:
+        return trigger_surge(sku, count=SURGE_SHOPPERS_PER_ROUND)
+    except TypeError as exc:
+        if "count" not in str(exc):
+            raise
+        return trigger_surge(sku, bots=SURGE_SHOPPERS_PER_ROUND)
 
 def run_surge(sku: str, name: str, carts_before: Optional[int]) -> None:
     """Send three bursts of simulated shoppers, remember the outcome and redraw so the cart spike is visible."""
     with st.spinner(f"Sending simulated shoppers to {name}..."):
-        outcomes = [trigger_surge(sku, count=SURGE_SHOPPERS_PER_ROUND) for _ in range(SURGE_ROUNDS)]
-    sent = sum(int_or_zero(o.get("successful")) for o in outcomes)
+        outcomes = [
+    _trigger_surge_burst(sku)
+    for _ in range(SURGE_ROUNDS)
+]
+    sent = sum(
+    int_or_zero(o.get("succeeded", o.get("successful", 0)))
+    for o in outcomes
+)
     st.session_state["surge_flash"] = {
         "sku": sku,
         "name": name,

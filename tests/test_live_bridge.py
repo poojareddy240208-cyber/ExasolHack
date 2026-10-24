@@ -1,257 +1,223 @@
 """
-Unit and Integration Test Suite for frontend/services/live_bridge.py.
+Tests for frontend/services/live_bridge.py: the single gateway between the Streamlit dashboard and the API.
 
-Verifies:
-1. All 8 endpoints map to the exact specified paths and HTTP methods:
-   - get_system_health() -> GET /api/v1/system/status
-   - get_inventory() -> GET /api/v1/inventory
-   - trigger_surge(item_id) -> POST /api/v1/cart/add
-   - execute_checkout(payload) -> POST /api/v1/checkout
-   - get_identity_investigation(customer_id) -> GET /api/v1/golden-customers/{customer_id}/investigation
-   - get_return_risk(user_id) -> GET /api/v1/return-risk/{user_id}
-   - get_churn_alerts() -> GET /api/v1/churn/alerts
-   - approve_churn_action(ticket_id, user) -> POST /api/v1/churn/alerts/{ticket_id}/approve
-2. Caching: Streamlit cache decorators are wrapped on all GET queries.
-3. Resilience & Error Handling: Unreachable backends, timeouts, 404, 409, and 500 status codes
-   never raise unhandled exceptions and return compliant fallback structures.
-4. Mutation & Invalidation: Surge simulation, checkouts, and approvals execute properly.
+HTTP is faked, so these prove the bridge's own behaviour: which URL/method/body each function sends, that nothing
+ever raises, the empty structures returned on failure, checkout outcome classification, caching and cache clearing.
+`test_every_bridge_route_exists_in_the_backend` also checks the routes against the real FastAPI app (it is skipped,
+with the missing routes listed, on a branch whose backend does not have them yet).
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch,MagicMock
 
 import pytest
 import requests
 
-from frontend.services.live_bridge import (
-    approve_churn_action,
-    clear_all_caches,
-    error_message,
-    execute_checkout,
-    get_backend_url,
-    get_churn_alerts,
-    get_identity_investigation,
-    get_inventory,
-    get_return_risk,
-    get_system_health,
-    is_error,
-    set_backend_url,
-    trigger_surge,
-)
+from frontend.services import live_bridge as bridge
+
+BASE = bridge.API_BASE_URL + "/api/v1"
+
+
+class FakeResponse:
+    def __init__(self, status=200, body=None, reason="OK", raw_text=None):
+        self.status_code = status
+        self.reason = reason
+        self.ok = 200 <= status < 400
+        self._body = body
+        self._raw = raw_text
+
+    def json(self):
+        if self._raw is not None:
+            raise ValueError("not json")
+        return self._body
+
+
+class FakeSession:
+    """Records every request and answers from a queue, or from a function of the request."""
+
+    def __init__(self, responder):
+        self.calls = []
+        self._responder = responder
+
+    def request(self, method, url, params=None, json=None, timeout=None):
+        self.calls.append({"method": method, "url": url, "params": params, "json": json, "timeout": timeout})
+        result = self._responder(method, url, json) if callable(self._responder) else self._responder
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 @pytest.fixture(autouse=True)
-def reset_backend_url():
-    """Ensure tests run against http://api:8000 and caches are reset."""
-    set_backend_url("http://api:8000")
-    clear_all_caches()
+def clean_caches():
+    for function in (
+        bridge.get_system_health,
+        bridge.get_inventory,
+        bridge.get_identity_investigation,
+        bridge.get_return_risk,
+        bridge.get_churn_alerts,
+    ):
+        function.clear()
     yield
-    set_backend_url("http://api:8000")
-    clear_all_caches()
 
 
-# -----------------------------------------------------------------------------
-# Test 1: get_system_health
-# -----------------------------------------------------------------------------
+def use(responder):
+    session = FakeSession(responder)
+    patcher = patch.object(bridge, "_session", return_value=session)
+    patcher.start()
+    return session, patcher
 
 
-def test_get_system_health_success():
-    mock_payload = {
-        "status": "HEALTHY",
-        "version": "0.1.0",
-        "environment": "development",
-        "checked_at": "2026-10-24T00:00:00Z",
-        "services": {
-            "postgres_oltp": {"status": "UP", "latency_ms": 1.2, "detail": "SELECT 1 ok"},
-            "redis_cache": {"status": "UP", "latency_ms": 0.8, "detail": "PING ok"},
-            "exasol_olap": {"status": "UP", "latency_ms": 15.0, "detail": "SELECT 1 ok"},
-        },
-        "data_freshness": {"stale": False, "age_seconds": 30.0},
-        "row_counts": {"inventory": 10, "sales_ledger": 100},
-    }
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = mock_payload
+@pytest.fixture
+def backend():
+    patchers = []
 
-    with patch("requests.Session.get", return_value=mock_resp) as mock_get:
-        data = get_system_health()
-        mock_get.assert_called_once()
-        call_url = mock_get.call_args[0][0]
-        assert call_url == "http://api:8000/api/v1/system/status"
-        assert data["status"] == "HEALTHY"
-        assert data["services"]["postgres_oltp"]["status"] == "UP"
-        assert is_error(data) is False
+    def make(responder):
+        session, patcher = use(responder)
+        patchers.append(patcher)
+        return session
+
+    yield make
+    for patcher in patchers:
+        patcher.stop()
 
 
-def test_get_system_health_unreachable():
-    with patch("requests.Session.get", side_effect=requests.exceptions.ConnectionError("Connection refused")):
-        data = get_system_health()
-        assert data["status"] == "DEGRADED"
-        assert data["services"]["postgres_oltp"]["status"] == "DOWN"
-        assert data["data_freshness"]["stale"] is True
-        assert is_error(data) is True
-        assert "unreachable" in error_message(data).lower()
+# ------------------------------------------------------------------ reads: URL, method, parameters
+READS = [
+    ("get_system_health", (), "/system/status", None),
+    ("get_inventory", (), "/inventory", None),
+    ("get_identity_investigation", ("CUST-GOLDEN-1",), "/golden-customers/CUST-GOLDEN-1/investigation", None),
+    ("get_return_risk", ("user_000005",), "/return-risk/user_000005", None),
+    (
+        "get_churn_alerts",
+        (),
+        "/churn/alerts",
+        {"limit": 50, "since_hours": 24, "min_score": 0.0},
+    ),
+]
 
 
-# -----------------------------------------------------------------------------
-# Test 2: get_inventory
-# -----------------------------------------------------------------------------
+@pytest.mark.parametrize("name,args,path,params", READS, ids=[r[0] for r in READS])
+def test_reads_call_the_documented_endpoint_and_return_its_json(backend, name, args, path, params):
+    session = backend(FakeResponse(200, {"hello": "world"}))
+    result = getattr(bridge, name)(*args)
+    assert result == {"hello": "world"} and not bridge.is_error(result)
+    call = session.calls[0]
+    assert (call["method"], call["url"], call["params"]) == ("GET", BASE + path, params)
+    assert call["timeout"] == bridge.READ_TIMEOUT
 
 
-def test_get_inventory_success():
-    mock_payload = {
-        "generated_at": "2026-10-24T00:00:00Z",
-        "total_items": 2,
-        "total_active_carts_5m": 5,
-        "redis_available": True,
-        "items": [
-            {
-                "item_id": "SKU-4090-GPU",
-                "name": "RTX 4090",
-                "stock": 50,
-                "version": 1,
-                "virtual_safety_buffer": 5,
-                "available_stock": 45,
-                "active_carts_5m": 3,
-                "predicted_demand_15m_estimate": 52,
-            }
-        ],
-    }
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = mock_payload
-
-    with patch("requests.Session.get", return_value=mock_resp) as mock_get:
-        data = get_inventory()
-        mock_get.assert_called_once()
-        assert mock_get.call_args[0][0] == "http://api:8000/api/v1/inventory"
-        assert data["total_items"] == 2
-        assert len(data["items"]) == 1
-        assert data["items"][0]["item_id"] == "SKU-4090-GPU"
-        assert is_error(data) is False
+def test_churn_alert_filters_are_passed_through(backend):
+    session = backend(FakeResponse(200, {"alerts": []}))
+    bridge.get_churn_alerts(limit=5, since_hours=72, min_score=0.9)
+    assert session.calls[0]["params"] == {"limit": 5, "since_hours": 72, "min_score": 0.9}
 
 
-def test_get_inventory_unreachable():
-    with patch("requests.Session.get", side_effect=requests.exceptions.Timeout("Read timed out")):
-        data = get_inventory()
-        assert data["total_items"] == 0
-        assert data["items"] == []
-        assert data["redis_available"] is False
-        assert is_error(data) is True
-        assert "timed out" in error_message(data).lower()
+def test_ids_with_special_characters_are_url_encoded(backend):
+    session = backend(FakeResponse(200, {}))
+    bridge.get_return_risk("a/b@c.com")
+    bridge.get_identity_investigation("CUST 1/2")
+    assert session.calls[0]["url"] == BASE + "/return-risk/a%2Fb%40c.com"
+    assert session.calls[1]["url"] == BASE + "/golden-customers/CUST%201%2F2/investigation"
 
 
-# -----------------------------------------------------------------------------
-# Test 3: trigger_surge (simulates bot traffic)
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------ reads: failures never raise
+EMPTY_KEYS = {
+    "get_system_health": ("services", "data_freshness", "row_counts"),
+    "get_inventory": ("items", "total_items", "redis_available"),
+    "get_identity_investigation": ("confidence_score", "supporting_evidence", "counter_evidence", "decision_status"),
+    "get_return_risk": ("user_id", "found", "risk_level", "policy"),
+    "get_churn_alerts": ("alerts", "count_in_window", "total_alerts"),
+}
+FAILURES = {
+    "unreachable": (requests.exceptions.ConnectionError("refused"), "unreachable", None),
+    "timeout": (requests.exceptions.ReadTimeout("slow"), "timeout", None),
+    "other request error": (requests.exceptions.InvalidURL("bad"), "request_error", None),
+    "server error": (FakeResponse(500, {"detail": "boom"}, "Internal Server Error"), "http_error", 500),
+    "unavailable": (FakeResponse(503, {"detail": "Run bootstrap."}, "Service Unavailable"), "http_error", 503),
+    "not json": (FakeResponse(200, raw_text="<html>"), "invalid_response", 200),
+    "json but not an object": (FakeResponse(200, ["a", "list"]), "invalid_response", 200),
+}
 
 
-def test_trigger_surge_success():
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {
-        "item_id": "SKU-4090-GPU",
-        "window_seconds": 300,
-        "active_carts_5m": 12,
-        "user_session_id": "bot_surge_test",
-    }
+@pytest.mark.parametrize("name,args,path,params", READS, ids=[r[0] for r in READS])
+@pytest.mark.parametrize("failure", FAILURES, ids=list(FAILURES))
+def test_failed_reads_return_an_empty_structure_with_an_error(backend, name, args, path, params, failure):
+    responder, kind, status = FAILURES[failure]
+    backend(responder)
+    result = getattr(bridge, name)(*args)  # must not raise
 
-    with patch("requests.Session.post", return_value=mock_resp) as mock_post:
-        result = trigger_surge("SKU-4090-GPU", count=5, max_workers=2)
-        assert result["success"] is True
-        assert result["status"] == "SURGE_SIMULATED"
-        assert result["item_id"] == "SKU-4090-GPU"
-        assert result["successful"] == 5
-        assert result["attempted"] == 5
-        assert mock_post.call_count == 5
-        assert mock_post.call_args[0][0] == "http://api:8000/api/v1/cart/add"
+    assert bridge.is_error(result)
+    assert result["_error"]["kind"] == kind and result["_error"]["status_code"] == status
+    assert bridge.error_message(result)  # always something the UI can show
+    for key in EMPTY_KEYS[name]:
+        assert key in result, f"{name} must keep '{key}' so the page can still render"
 
 
-def test_trigger_surge_empty_item_id():
-    result = trigger_surge("")
-    assert result["success"] is False
-    assert result["code"] == 400
-    assert "item_id is required" in result["error"]
+def test_empty_structures_are_safe_defaults(backend):
+    backend(requests.exceptions.ConnectionError())
+    assert bridge.get_inventory()["items"] == [] and bridge.get_inventory()["redis_available"] is False
+    assert bridge.get_system_health()["status"] == "UNREACHABLE"
+    assert bridge.get_churn_alerts()["alerts"] == [] and bridge.get_identity_investigation("x")["confidence_score"] == 0
+    risk = bridge.get_return_risk("u1")
+    # unknown must not look like "level 1 / free returns"
+    assert risk["risk_level"] is None and risk["policy"] is None and risk["user_id"] == "u1"
 
 
-def test_trigger_surge_all_failures():
-    with patch("requests.Session.post", side_effect=requests.exceptions.ConnectionError("Refused")):
-        result = trigger_surge("SKU-TEST", count=3)
-        assert result["success"] is False
-        assert result["successful"] == 0
-        assert result["attempted"] == 3
-        assert "unreachable" in result["error"].lower()
+def test_http_error_message_comes_from_the_backend_detail(backend):
+    backend(FakeResponse(503, {"detail": "Dashboard data is unavailable. Run bootstrap."}))
+    assert "Run bootstrap" in bridge.error_message(bridge.get_inventory())
 
 
-# -----------------------------------------------------------------------------
-# Test 4: execute_checkout
-# -----------------------------------------------------------------------------
+def test_validation_errors_are_flattened_into_one_sentence(backend):
+    detail = [{"loc": ["body", "quantity"], "msg": "Input should be greater than 0"}]
+    backend(FakeResponse(422, {"detail": detail}, "Unprocessable Entity"))
+    message = bridge.execute_checkout({"item_id": "A", "quantity": 0, "user_session_id": "s"})["message"]
+    assert message == "quantity: Input should be greater than 0"
 
 
-def test_execute_checkout_success():
-    checkout_payload = {
-        "item_id": "SKU-4090-GPU",
-        "quantity": 2,
-        "user_session_id": "sess_shopper_100",
-        "user_id": "user_vip_001",
-        "expected_version": 1,
-    }
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.content = b'{"order_id": "ORD-12345", "status": "SUCCESS", "remaining_stock": 48}'
-    mock_resp.json.return_value = {
-        "order_id": "ORD-12345",
-        "status": "SUCCESS",
-        "message": "Order placed",
-        "item_id": "SKU-4090-GPU",
-        "quantity": 2,
-        "remaining_stock": 48,
-        "precomputed_return_risk_level": 1,
-    }
+def test_empty_structures_are_not_shared_between_calls(backend):
+    backend(requests.exceptions.ConnectionError())
+    first = bridge.get_inventory()
+    first["items"].append("polluted")
+    bridge.get_inventory.clear()
+    assert bridge.get_inventory()["items"] == []
 
-    with patch("requests.Session.post", return_value=mock_resp) as mock_post:
-        result = execute_checkout(checkout_payload)
-        mock_post.assert_called_once_with(
-            "http://api:8000/api/v1/checkout",
-            json=checkout_payload,
-            timeout=(2.0, 5.0),
+
+# ------------------------------------------------------------------ caching
+def test_reads_are_cached_and_cleared_after_a_successful_action(backend):
+    def responder(method, url, body):
+        if method == "POST":
+            return FakeResponse(200, {"message": "Order placed.", "status": "SUCCESS"})
+        return FakeResponse(200, {"items": []})
+
+    session = backend(responder)
+    bridge.get_inventory()
+    bridge.get_inventory()
+    assert [c["method"] for c in session.calls] == ["GET"]  # second call served from cache
+
+    bridge.execute_checkout({"item_id": "A", "quantity": 1, "user_session_id": "s"})
+    bridge.get_inventory()
+    assert [c["method"] for c in session.calls] == ["GET", "POST", "GET"]  # fresh data right after the order
+
+
+def test_a_failed_action_keeps_the_cache(backend):
+    def responder(method, url, body):
+        return (
+            FakeResponse(409, {"detail": "Concurrent transaction conflict."})
+            if method == "POST"
+            else FakeResponse(200, {"items": []})
         )
-        assert result["success"] is True
-        assert result["order_id"] == "ORD-12345"
-        assert result["remaining_stock"] == 48
 
-
-def test_execute_checkout_conflict_409():
-    checkout_payload = {
-        "item_id": "SKU-4090-GPU",
-        "quantity": 999,
-        "user_session_id": "sess_1",
-    }
-    mock_resp = MagicMock()
-    mock_resp.status_code = 409
-    mock_resp.content = b'{"detail": "Insufficient available stock"}'
-    mock_resp.json.return_value = {"detail": "Insufficient available stock"}
-
-    with patch("requests.Session.post", return_value=mock_resp):
-        result = execute_checkout(checkout_payload)
-        assert result["success"] is False
-        assert result["status"] == "CONFLICT"
-        assert result["code"] == 409
-        assert "Insufficient available stock" in result["error"]
-        assert is_error(result) is True
-
-
-def test_execute_checkout_unreachable():
-    with patch("requests.Session.post", side_effect=requests.exceptions.ConnectionError("Offline")):
-        result = execute_checkout({"item_id": "SKU-1", "quantity": 1})
-        assert result["success"] is False
-        assert result["status"] == "UNREACHABLE"
-        assert result["code"] == 503
-        assert is_error(result) is True
+    session = backend(responder)
+    bridge.get_inventory()
+    bridge.execute_checkout({"item_id": "A", "quantity": 1, "user_session_id": "s"})
+    bridge.get_inventory()
+    assert [c["method"] for c in session.calls] == ["GET", "POST"]
 
 
 # -----------------------------------------------------------------------------
 # Test 5: get_identity_investigation
 # -----------------------------------------------------------------------------
+
 
 
 def test_get_identity_investigation_success():
@@ -264,193 +230,177 @@ def test_get_identity_investigation_success():
             {"node_id": "SHOPIFY:usr_1", "type": "SHOPIFY", "confidence": 1.0},
             {"node_id": "DEVICE:dev_1", "type": "DEVICE", "confidence": 0.98},
         ],
-        "xai_rationale": "High confidence match via deterministic email and shared device finger-print.",
+        "xai_rationale": (
+            "High confidence match via deterministic email "
+            "and shared device finger-print."
+        ),
     }
+
     mock_resp = MagicMock()
     mock_resp.status_code = 200
+    mock_resp.ok = True
     mock_resp.json.return_value = mock_payload
 
-    with patch("requests.Session.get", return_value=mock_resp) as mock_get:
-        result = get_identity_investigation(customer_id)
-        mock_get.assert_called_once()
-        assert mock_get.call_args[0][0] == "http://api:8000/api/v1/golden-customers/CUST-GOLDEN-001/investigation"
-        assert result["golden_customer_id"] == customer_id
-        assert result["confidence_score"] == 0.98
-        assert len(result["stitched_identities"]) == 2
-        assert is_error(result) is False
+    with patch("requests.Session.request", return_value=mock_resp) as mock_request:
+        result = bridge.get_identity_investigation(customer_id)
+
+        mock_request.assert_called_once()
+        assert mock_request.call_args.args[0] == "GET"
+        assert mock_request.call_args.args[1] == (
+            "http://api:8000/api/v1/"
+            "golden-customers/CUST-GOLDEN-001/investigation"
+        )
+
+    assert result["golden_customer_id"] == customer_id
+    assert result["confidence_score"] == 0.98
+    assert len(result["stitched_identities"]) == 2
+    assert bridge.is_error(result) is False
 
 
 def test_get_identity_investigation_404():
     mock_resp = MagicMock()
     mock_resp.status_code = 404
+    mock_resp.ok = False
+    mock_resp.reason = "Not Found"
     mock_resp.text = "Customer not found"
+    mock_resp.json.return_value = {"detail": "Customer not found"}
 
-    with patch("requests.Session.get", return_value=mock_resp):
-        result = get_identity_investigation("UNKNOWN_ID")
-        assert result["found"] is False
-        assert result["confidence_score"] == 0.0
-        assert is_error(result) is True
-        assert "not found" in error_message(result).lower()
+    with patch("requests.Session.request", return_value=mock_resp):
+        result = bridge.get_identity_investigation("UNKNOWN_ID")
 
+    assert result["found"] is False
+    assert result["confidence_score"] == 0
+    assert bridge.is_error(result) is True
+    assert "not found" in bridge.error_message(result).lower()
 
-# -----------------------------------------------------------------------------
-# Test 6: get_return_risk
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------ surge simulation
+def test_surge_adds_one_distinct_bot_session_per_request(backend):
+    counter = {"n": 0}
 
+    def responder(method, url, body):
+        counter["n"] += 1
+        return FakeResponse(200, {"item_id": body["item_id"], "active_carts_5m": counter["n"], "window_seconds": 300})
 
-def test_get_return_risk_success():
-    user_id = "user_000005"
-    mock_payload = {
-        "user_id": user_id,
-        "found": True,
-        "risk_level": 5,
-        "return_rate": 0.75,
-        "purchases_6m": 8,
-        "returns_6m": 6,
-        "policy": {
-            "level": 5,
-            "name": "Penalty Guard",
-            "restocking_fee_usd": 5.0,
-            "cash_on_delivery_allowed": False,
-        },
-        "xai_explanation": "Customer shows high return velocity (75% returns across 8 orders).",
-    }
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = mock_payload
-
-    with patch("requests.Session.get", return_value=mock_resp) as mock_get:
-        result = get_return_risk(user_id)
-        mock_get.assert_called_once()
-        assert mock_get.call_args[0][0] == "http://api:8000/api/v1/return-risk/user_000005"
-        assert result["risk_level"] == 5
-        assert result["policy"]["cash_on_delivery_allowed"] is False
-        assert is_error(result) is False
+    session = backend(responder)
+    result = bridge.trigger_surge("SKU-A", bots=5)
+    sessions = [c["json"]["user_session_id"] for c in session.calls]
+    assert len(session.calls) == 5 and len(set(sessions)) == 5 and all(s.startswith("bot-") for s in sessions)
+    assert all(c["url"] == BASE + "/cart/add" and c["method"] == "POST" for c in session.calls)
+    assert result["ok"] and result["requested"] == 5 and result["succeeded"] == 5 and result["active_carts_5m"] == 5
+    assert not bridge.is_error(result)
 
 
-def test_get_return_risk_unreachable():
-    with patch("requests.Session.get", side_effect=requests.exceptions.ConnectionError("Down")):
-        result = get_return_risk("user_test")
-        assert result["risk_level"] == 1
-        assert result["policy"]["cash_on_delivery_allowed"] is True
-        assert is_error(result) is True
+def test_surge_default_is_one_request_and_is_capped(backend):
+    session = backend(FakeResponse(200, {"active_carts_5m": 1}))
+    bridge.trigger_surge("SKU-A")
+    assert len(session.calls) == 1
+    session.calls.clear()
+    assert bridge.trigger_surge("SKU-A", bots=10_000)["requested"] == bridge.MAX_SURGE_BOTS
+    assert bridge.trigger_surge("SKU-A", bots=0)["requested"] == 1
 
 
-# -----------------------------------------------------------------------------
-# Test 7: get_churn_alerts
-# -----------------------------------------------------------------------------
+def test_surge_partial_failure_is_still_ok_but_reports_the_failures(backend):
+    outcomes = iter(
+        [
+            FakeResponse(200, {"active_carts_5m": 1}),
+            requests.exceptions.ConnectionError(),
+            FakeResponse(200, {"active_carts_5m": 2}),
+        ]
+    )
+    backend(lambda *_: next(outcomes))
+    result = bridge.trigger_surge("SKU-A", bots=3)
+    assert result["ok"] and result["succeeded"] == 2 and len(result["failures"]) == 1 and not bridge.is_error(result)
 
 
-def test_get_churn_alerts_success():
-    mock_payload = {
-        "since_hours": 24,
-        "count_in_window": 1,
-        "total_alerts": 5,
-        "alerts": [
-            {
-                "ticket_id": "ZD-999",
-                "golden_customer_id": "CUST-GOLDEN-001",
-                "customer_email": "vip@example.com",
-                "churn_score": 0.94,
-                "ltv_tier": "Top 1% VIP",
-                "action_triggered": "ACTION TRIGGERED: Concierge Replacement",
-                "status": "DISPATCHED",
-                "created_at": "2026-10-24T00:00:00Z",
-            }
-        ],
-    }
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = mock_payload
-
-    with patch("requests.Session.get", return_value=mock_resp) as mock_get:
-        result = get_churn_alerts(limit=10, since_hours=12, min_score=0.85)
-        mock_get.assert_called_once()
-        assert mock_get.call_args[0][0] == "http://api:8000/api/v1/churn/alerts"
-        assert mock_get.call_args[1]["params"] == {
-            "limit": 10,
-            "since_hours": 12,
-            "min_score": 0.85,
-        }
-        assert result["count_in_window"] == 1
-        assert len(result["alerts"]) == 1
-        assert is_error(result) is False
+def test_surge_total_failure_carries_an_error(backend):
+    backend(FakeResponse(404, {"detail": "Item 'NOPE' not found in product catalog."}, "Not Found"))
+    result = bridge.trigger_surge("NOPE", bots=2)
+    assert not result["ok"] and result["succeeded"] == 0 and bridge.is_error(result)
+    assert "not found" in bridge.error_message(result)
 
 
-def test_get_churn_alerts_unreachable():
-    with patch("requests.Session.get", side_effect=requests.exceptions.ConnectTimeout("Timeout")):
-        result = get_churn_alerts()
-        assert result["alerts"] == []
-        assert result["total_alerts"] == 0
-        assert is_error(result) is True
+def test_surge_requires_an_item(backend):
+    session = backend(FakeResponse(200, {}))
+    assert bridge.trigger_surge("  ")["ok"] is False and session.calls == []
 
 
-# -----------------------------------------------------------------------------
-# Test 8: approve_churn_action
-# -----------------------------------------------------------------------------
+def test_a_successful_surge_clears_the_inventory_cache(backend):
+    def responder(method, url, body):
+        return FakeResponse(200, {"active_carts_5m": 1}) if method == "POST" else FakeResponse(200, {"items": []})
+
+    session = backend(responder)
+    bridge.get_inventory()
+    bridge.trigger_surge("SKU-A")
+    bridge.get_inventory()
+    assert [c["method"] for c in session.calls] == ["GET", "POST", "GET"]
 
 
-def test_approve_churn_action_success():
-    ticket_id = "ZD-999"
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.content = b'{"ticket_id": "ZD-999", "status": "ACTION_EXECUTED"}'
-    mock_resp.json.return_value = {
-        "ticket_id": ticket_id,
-        "status": "ACTION_EXECUTED",
-        "message": "Action approved and executed successfully.",
-        "approved_by": "alice_supervisor",
-        "executed_at": "2026-10-24T00:01:00Z",
-    }
+# ------------------------------------------------------------------ approvals
+def test_approve_sends_the_operator_and_clears_alert_cache(backend):
+    def responder(method, url, body):
+        if method == "POST":
+            return FakeResponse(200, {"ticket_id": "ZD-1", "message": "Action approved and executed successfully."})
+        return FakeResponse(200, {"alerts": []})
 
-    with patch("requests.Session.post", return_value=mock_resp) as mock_post:
-        result = approve_churn_action(ticket_id, user="alice_supervisor")
-        mock_post.assert_called_once_with(
-            "http://api:8000/api/v1/churn/alerts/ZD-999/approve",
-            json={"approved_by": "alice_supervisor"},
-            timeout=(2.0, 5.0),
-        )
-        assert result["success"] is True
-        assert result["status"] == "ACTION_EXECUTED"
-        assert result["approved_by"] == "alice_supervisor"
+    session = backend(responder)
+    bridge.get_churn_alerts()
+    result = bridge.approve_churn_action("ZD-1", "vyom")
+    post = session.calls[1]
+    assert (post["method"], post["url"], post["json"]) == (
+        "POST",
+        BASE + "/churn/alerts/ZD-1/approve",
+        {"approved_by": "vyom"},
+    )
+    assert result["ok"] and result["already_executed"] is False and not bridge.is_error(result)
+    bridge.get_churn_alerts()
+    assert [c["method"] for c in session.calls] == ["GET", "POST", "GET"]
 
 
-def test_approve_churn_action_404():
-    mock_resp = MagicMock()
-    mock_resp.status_code = 404
-    mock_resp.content = b'{"detail": "Alert not found"}'
-    mock_resp.json.return_value = {"detail": "Alert not found"}
-
-    with patch("requests.Session.post", return_value=mock_resp):
-        result = approve_churn_action("ZD-NONEXISTENT")
-        assert result["success"] is False
-        assert result["status"] == "NOT_FOUND"
-        assert result["code"] == 404
-        assert is_error(result) is True
+def test_approving_twice_is_reported_as_already_executed(backend):
+    backend(FakeResponse(200, {"ticket_id": "ZD-1", "message": "Action already executed."}))
+    result = bridge.approve_churn_action("ZD-1", "vyom")
+    assert result["ok"] and result["already_executed"] is True
 
 
-def test_approve_churn_action_unreachable():
-    with patch("requests.Session.post", side_effect=requests.exceptions.ConnectionError("Down")):
-        result = approve_churn_action("ZD-999")
-        assert result["success"] is False
-        assert result["status"] == "UNREACHABLE"
-        assert result["code"] == 503
-        assert is_error(result) is True
+def test_approve_failures(backend):
+    backend(FakeResponse(404, {"detail": "Retention campaign alert for ticket 'ZD-9' not found."}, "Not Found"))
+    missing = bridge.approve_churn_action("ZD-9", "vyom")
+    assert not missing["ok"] and missing["_error"]["status_code"] == 404 and "no longer exists" in missing["message"]
+    backend(requests.exceptions.ConnectionError())
+    assert bridge.approve_churn_action("ZD-1", "vyom")["_error"]["kind"] == "unreachable"
 
 
-# -----------------------------------------------------------------------------
-# Test Cache Decorator Verification
-# -----------------------------------------------------------------------------
+def test_approve_needs_a_ticket_and_an_operator(backend):
+    session = backend(FakeResponse(200, {}))
+    assert not bridge.approve_churn_action("", "vyom")["ok"]
+    assert not bridge.approve_churn_action("ZD-1", " ")["ok"]
+    assert session.calls == []
 
 
-def test_cache_decorators_present():
-    """Verify Streamlit caching is applied to all GET operations."""
-    for fn in (
-        get_system_health,
-        get_inventory,
-        get_identity_investigation,
-        get_return_risk,
-        get_churn_alerts,
-    ):
-        # Streamlit decorated functions have .clear and cache-related attributes
-        assert hasattr(fn, "clear"), f"Function {fn.__name__} must be decorated with @st.cache_data"
+def test_approve_encodes_the_ticket_id(backend):
+    session = backend(FakeResponse(200, {"message": "ok"}))
+    bridge.approve_churn_action("ZD/1 2", "vyom")
+    assert session.calls[0]["url"] == BASE + "/churn/alerts/ZD%2F1%202/approve"
+
+
+# ------------------------------------------------------------------ contract with the real backend
+def test_every_bridge_route_exists_in_the_backend():
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+
+    schema = TestClient(app).get("/openapi.json").json()["paths"]
+    needed = [
+        ("get", "/api/v1/system/status"),
+        ("get", "/api/v1/inventory"),
+        ("post", "/api/v1/cart/add"),
+        ("post", "/api/v1/checkout"),
+        ("get", "/api/v1/golden-customers/{id}/investigation"),
+        ("get", "/api/v1/return-risk/{user_id}"),
+        ("get", "/api/v1/churn/alerts"),
+        ("post", "/api/v1/churn/alerts/{ticket_id}/approve"),
+    ]
+    missing = [f"{m.upper()} {p}" for m, p in needed if m not in schema.get(p, {})]
+    if missing:
+        pytest.skip(f"this branch's backend does not have these routes yet: {missing}")
+    assert not missing

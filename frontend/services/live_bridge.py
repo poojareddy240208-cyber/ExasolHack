@@ -1,603 +1,451 @@
 """
-OmniSync Live Bridge - Streamlit to FastAPI Service Gateway.
+Live data bridge between the Streamlit dashboard and the OmniSync FastAPI backend.
 
-This module provides a production-grade communication bridge between the Streamlit UI
-and the OmniSync FastAPI backend (running at http://api:8000 by default).
+Every call the UI makes to the backend goes through this module, so the pages never deal with HTTP, timeouts or
+error shapes themselves.
 
-Design Invariants:
-1. Fast & Non-Blocking: All GET calls are wrapped in @st.cache_data(ttl=2) to prevent UI spamming.
-2. Resilience: Unreachable backends or HTTP errors return safe fallback structures or error dicts;
-   no unhandled exceptions crash the Streamlit interface.
-3. Automatic Invalidation: State mutations (surge trigger, checkout, churn approval) clear relevant caches.
-4. Configurable Base URL: Default is http://api:8000, overridable via BACKEND_API_BASE_URL env var.
+Error contract (nothing here ever raises)
+-----------------------------------------
+* Read functions (GET) return the backend's JSON on success. When the backend cannot be reached, answers with an
+  error, or sends something unreadable, they return an *empty structure with the same keys the UI reads*
+  (for example ``{"items": [], "total_items": 0, ...}``) plus an ``"_error"`` entry. Pages can render the empty
+  structure directly and show ``error_message(result)`` when ``is_error(result)`` is true.
+* Action functions (POST) return a result dict with ``"ok"`` and a human-readable ``"message"``. When ``ok`` is
+  false an ``"_error"`` entry explains why. Business outcomes such as a 409 from checkout are normal results,
+  not crashes, and ``execute_checkout`` classifies them in ``"outcome"``.
+
+``_error`` is ``{"kind", "status_code", "message", "detail"}`` where ``kind`` is one of ``unreachable``,
+``timeout``, ``http_error``, ``invalid_response`` or ``request_error``.
+
+Caching: GET functions are wrapped in ``st.cache_data(ttl=2)`` so a page that reruns several times a second does not
+flood the API. Successful actions clear the affected caches, so the screen reflects a checkout or an approval at once.
 """
 
 import logging
 import os
-import urllib.parse
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional, Union
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
+from urllib.parse import quote
 
 import requests
 import streamlit as st
+from requests.adapters import HTTPAdapter
 
-logger = logging.getLogger("omnisync.frontend.live_bridge")
+logger = logging.getLogger("omnisync.frontend.bridge")
 
-# -----------------------------------------------------------------------------
-# Configuration & Session Management
-# -----------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+# Configuration
+# --------------------------------------------------------------------------------------------------------------
+API_BASE_URL = os.getenv("BACKEND_API_BASE_URL", "http://api:8000").rstrip("/")
+API_PREFIX = "/api/v1"
 
-DEFAULT_BASE_URL = os.getenv("BACKEND_API_BASE_URL", "http://api:8000").rstrip("/")
-DEFAULT_CONNECT_TIMEOUT = float(os.getenv("API_CONNECT_TIMEOUT", "2.0"))
-DEFAULT_READ_TIMEOUT = float(os.getenv("API_READ_TIMEOUT", "5.0"))
-DEFAULT_TIMEOUT = (DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT)
+READ_TIMEOUT = (2, 5)  # (connect, read) seconds: a dead backend is reported within a few seconds
+WRITE_TIMEOUT = (2, 15)  # checkout and approvals may legitimately take longer
+CACHE_TTL_SECONDS = 2
+MAX_SURGE_BOTS = 500
+SURGE_WORKERS = 16
 
-_session: Optional[requests.Session] = None
+ERROR_KEY = "_error"
 
-
-def get_backend_url() -> str:
-    """Return the currently configured backend API base URL."""
-    return os.getenv("BACKEND_API_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
-
-
-def set_backend_url(url: str) -> None:
-    """Override the backend API base URL at runtime."""
-    global DEFAULT_BASE_URL
-    DEFAULT_BASE_URL = url.rstrip("/")
-    os.environ["BACKEND_API_BASE_URL"] = DEFAULT_BASE_URL
-
-
-def _get_http_session() -> requests.Session:
-    """Singleton requests session with connection pooling for low-latency calls."""
-    global _session
-    if _session is None:
-        _session = requests.Session()
-        adapter = requests.adapters.HTTPAdapter(
-            pool_connections=20,
-            pool_maxsize=50,
-            max_retries=1,
-        )
-        _session.mount("http://", adapter)
-        _session.mount("https://", adapter)
-    return _session
-
-
-# -----------------------------------------------------------------------------
-# Helper Utilities
-# -----------------------------------------------------------------------------
+__all__ = [
+    "API_BASE_URL",
+    "approve_churn_action",
+    "clear_all_caches",
+    "error_message",
+    "execute_checkout",
+    "get_backend_url",
+    "get_churn_alerts",
+    "get_identity_investigation",
+    "get_inventory",
+    "get_return_risk",
+    "get_system_health",
+    "is_error",
+    "set_backend_url",
+    "trigger_surge",
+]
+# --------------------------------------------------------------------------------------------------------------
+# Errors
+# --------------------------------------------------------------------------------------------------------------
+def _make_error(kind: str, message: str, status_code: Optional[int] = None, detail: Any = None) -> Dict[str, Any]:
+    return {"kind": kind, "status_code": status_code, "message": message, "detail": detail}
 
 
 def is_error(result: Any) -> bool:
-    """Check if an API response dictionary denotes an error condition."""
-    if not isinstance(result, dict):
-        return True
-    if result.get("error") is not None:
-        return True
-    if result.get("success") is False:
-        return True
-    if result.get("status") in ("DEGRADED", "FAILED", "CONFLICT", "NOT_FOUND", "UNREACHABLE"):
-        return True
-    return False
+    """True when a bridge result carries an error marker."""
+    return isinstance(result, Mapping) and ERROR_KEY in result
+
+def error_message(result: Any, default: str = "") -> str:
+    """Return a readable error message from a failed result."""
+    if not isinstance(result, Mapping):
+        return default
+
+    error = result.get(ERROR_KEY)
+
+    if isinstance(error, Mapping):
+        return str(error.get("message") or "Unexpected error.")
+
+    if isinstance(error, str) and error:
+        return error
+
+    plain_error = result.get("error")
+    if isinstance(plain_error, Mapping):
+        message = plain_error.get("message")
+        if message:
+            return str(message)
+    elif plain_error:
+        return str(plain_error)
+
+    if result.get("ok") is False and result.get("message"):
+        return str(result["message"])
+
+    if result.get("success") is False and result.get("message"):
+        return str(result["message"])
+
+    return default
 
 
-def error_message(result: Any) -> Optional[str]:
-    """Extract a user-facing error message from a response dictionary."""
-    if not isinstance(result, dict):
-        return "Invalid response format from service bridge."
-    return result.get("error") or result.get("detail") or result.get("message")
+def _detail_message(body: Any, response: requests.Response) -> str:
+    """Turn FastAPI's `{"detail": ...}` (a string, or a list of validation errors) into one readable sentence."""
+    detail = body.get("detail") if isinstance(body, Mapping) else None
+    if isinstance(detail, str) and detail:
+        return detail
+    if isinstance(detail, list):
+        parts = []
+        for item in detail:
+            if isinstance(item, Mapping):
+                location = ".".join(str(p) for p in item.get("loc", []) if p != "body")
+                parts.append(f"{location}: {item.get('msg')}" if location else str(item.get("msg")))
+            else:
+                parts.append(str(item))
+        if parts:
+            return "; ".join(parts)
+    return f"The backend answered HTTP {response.status_code} {response.reason or ''}".strip()
 
 
-def _safe_quote(identifier: Union[str, int]) -> str:
-    """Safely URL-encode path parameters."""
-    return urllib.parse.quote(str(identifier).strip(), safe="")
+# --------------------------------------------------------------------------------------------------------------
+# HTTP plumbing
+# --------------------------------------------------------------------------------------------------------------
+@st.cache_resource(show_spinner=False)
+def _session() -> requests.Session:
+    """One pooled HTTP session for the whole app (keeps connections open; sized for the surge simulator)."""
+    session = requests.Session()
+    adapter = HTTPAdapter(pool_connections=4, pool_maxsize=SURGE_WORKERS * 2)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    session.headers.update({"Accept": "application/json", "User-Agent": "omnisync-dashboard"})
+    return session
 
 
-def _make_error(message: str, code: int = 503, status_label: str = "UNREACHABLE") -> Dict[str, Any]:
-    """Construct a standardized error structure."""
+def _url(path: str) -> str:
+    return f"{API_BASE_URL}{API_PREFIX}{path}"
+
+
+def _segment(value: str) -> str:
+    """Make an id safe to place in a URL path (ids can contain '@', '/', ':' ...)."""
+    return quote(str(value), safe="")
+
+
+def _call(
+    method: str,
+    path: str,
+    *,
+    params: Optional[Mapping[str, Any]] = None,
+    body: Optional[Mapping[str, Any]] = None,
+    timeout: Tuple[float, float] = READ_TIMEOUT,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[int]]:
+    """
+    Send one request. Returns ``(data, error, status_code)``: exactly one of `data` / `error` is set.
+    `status_code` is None when no HTTP answer was received.
+    """
+    url = _url(path)
+    try:
+        response = _session().request(method, url, params=params, json=body, timeout=timeout)
+    except requests.exceptions.Timeout:
+        logger.warning("Backend timed out: %s %s", method, url)
+        return None, _make_error("timeout", "The backend did not answer in time. Try again in a moment."), None
+    except requests.exceptions.ConnectionError:
+        logger.warning("Backend unreachable: %s %s", method, url)
+        return None, _make_error("unreachable", f"Cannot reach the backend at {API_BASE_URL}. Is it running?"), None
+    except requests.exceptions.RequestException as exc:
+        logger.warning("Request failed: %s %s: %s", method, url, exc)
+        return None, _make_error("request_error", f"The request could not be sent: {type(exc).__name__}."), None
+
+    try:
+        parsed = response.json()
+    except ValueError:
+        parsed = None
+
+    if not response.ok:
+        message = _detail_message(parsed, response)
+        logger.info("Backend returned %s for %s %s: %s", response.status_code, method, url, message)
+        return None, _make_error("http_error", message, response.status_code, parsed), response.status_code
+
+    if not isinstance(parsed, dict):
+        logger.warning("Unreadable backend response for %s %s", method, url)
+        return (
+            None,
+            _make_error(
+                "invalid_response", "The backend sent a response the dashboard cannot read.", response.status_code
+            ),
+            response.status_code,
+        )
+    return parsed, None, response.status_code
+
+
+def _read(path: str, empty: Callable[[], Dict[str, Any]], params: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    """GET helper: the data on success, otherwise a fresh empty structure carrying the error."""
+    data, error, _ = _call("GET", path, params=params)
+    if error is None and data is not None:
+        return data
+    fallback = empty()
+    fallback[ERROR_KEY] = error
+    return fallback
+
+
+def _invalidate(*cached: Any) -> None:
+    """Drop cached reads after an action changed the data behind them."""
+    for function in cached:
+        try:
+            function.clear()
+        except Exception as exc:  # a cache problem must never fail an action that already succeeded
+            logger.debug("Could not clear cache for %s: %s", getattr(function, "__name__", function), exc)
+def clear_all_caches() -> None:
+    """Clear all cached backend reads."""
+    _invalidate(
+        get_system_health,
+        get_inventory,
+        get_identity_investigation,
+        get_return_risk,
+        get_churn_alerts,
+    )
+
+
+def get_backend_url() -> str:
+    """Return the configured backend base URL."""
+    return API_BASE_URL
+
+
+def set_backend_url(url: str) -> None:
+    """Update the backend base URL and clear cached reads."""
+    global API_BASE_URL
+
+    API_BASE_URL = url.rstrip("/")
+    clear_all_caches()
+
+# --------------------------------------------------------------------------------------------------------------
+# Empty structures (what the UI renders when the backend cannot answer)
+# --------------------------------------------------------------------------------------------------------------
+def _empty_health() -> Dict[str, Any]:
     return {
-        "success": False,
-        "status": status_label,
-        "error": message,
-        "detail": message,
-        "code": code,
-    }
-
-
-def _empty_health(error_msg: str) -> Dict[str, Any]:
-    """Safe fallback dictionary matching SystemStatusResponse."""
-    return {
-        "status": "DEGRADED",
-        "version": "unknown",
-        "environment": "unknown",
+        "status": "UNREACHABLE",
+        "version": None,
+        "environment": None,
         "checked_at": None,
-        "services": {
-            "postgres_oltp": {"status": "DOWN", "latency_ms": 0.0, "detail": error_msg},
-            "redis_cache": {"status": "DOWN", "latency_ms": 0.0, "detail": error_msg},
-            "exasol_olap": {"status": "DOWN", "latency_ms": 0.0, "detail": error_msg},
-        },
+        "services": {},
         "data_freshness": {
             "user_risk_cache_synced_at": None,
             "golden_customers_synced_at": None,
             "age_seconds": None,
             "stale": True,
         },
-        "row_counts": {
-            "inventory": None,
-            "sales_ledger": None,
-            "golden_customers": None,
-            "user_risk_cache": None,
-            "retention_campaign_audit": None,
-        },
-        "error": error_msg,
+        "row_counts": {},
     }
 
 
-def _empty_inventory(error_msg: str) -> Dict[str, Any]:
-    """Safe fallback dictionary matching InventoryListResponse."""
+def _empty_inventory() -> Dict[str, Any]:
     return {
         "generated_at": None,
         "total_items": 0,
-        "total_active_carts_5m": 0,
+        "total_active_carts_5m": None,
         "redis_available": False,
         "items": [],
-        "error": error_msg,
     }
 
 
-def _empty_investigation(customer_id: str, error_msg: str) -> Dict[str, Any]:
-    """Safe fallback dictionary matching IdentityInvestigationResponse."""
+def _empty_investigation() -> Dict[str, Any]:
     return {
-        "golden_customer_id": customer_id,
-        "primary_email": None,
-        "confidence_score": 0.0,
         "found": False,
-        "stitched_identities": [],
-        "evidence_trail": [],
-        "graph_metrics": {"total_nodes": 0, "total_edges": 0, "density": 0.0},
-        "xai_rationale": f"Investigation unavailable: {error_msg}",
-        "error": error_msg,
+        "confidence_score": 0,
+        "supporting_evidence": [],
+        "counter_evidence": [],
+        "decision_status": "UNAVAILABLE",
     }
 
-
-def _empty_return_risk(user_id: str, error_msg: str) -> Dict[str, Any]:
-    """Safe fallback dictionary matching ReturnRiskResponse."""
+def _empty_return_risk(user_id: str) -> Dict[str, Any]:
+    # risk_level and policy are None, not level 1: showing "free returns" when we simply do not know would mislead.
     return {
         "user_id": user_id,
         "found": False,
-        "risk_level": 1,
-        "return_rate": 0.0,
-        "purchases_6m": 0,
-        "returns_6m": 0,
+        "risk_level": None,
+        "return_rate": None,
+        "purchases_6m": None,
+        "returns_6m": None,
         "golden_customer_id": None,
         "computed_at": None,
         "synced_at": None,
-        "policy": {
-            "level": 1,
-            "name": "Standard Free Returns",
-            "customer_message": "Free returns with an instant prepaid label.",
-            "restocking_fee_usd": 0.0,
-            "cash_on_delivery_allowed": True,
-            "keep_it_discount_pct": 0,
-        },
-        "xai_explanation": f"Return risk unavailable: {error_msg}",
+        "policy": None,
+        "xai_explanation": None,
         "staleness_warning": False,
         "human_review_required": False,
-        "error": error_msg,
     }
 
 
-def _empty_alerts(error_msg: str, since_hours: int = 24) -> Dict[str, Any]:
-    """Safe fallback dictionary matching ChurnAlertsResponse."""
-    return {
-        "since_hours": since_hours,
-        "count_in_window": 0,
-        "total_alerts": 0,
-        "alerts": [],
-        "error": error_msg,
-    }
+def _empty_alerts(since_hours: int) -> Dict[str, Any]:
+    return {"since_hours": since_hours, "count_in_window": 0, "total_alerts": 0, "alerts": []}
 
 
-# -----------------------------------------------------------------------------
-# Cache Invalidation Helpers
-# -----------------------------------------------------------------------------
-
-
-def _safe_clear_cache(func_obj: Any) -> None:
-    """Clear Streamlit cache function safely."""
-    try:
-        if hasattr(func_obj, "clear"):
-            func_obj.clear()
-    except Exception as exc:
-        logger.debug(f"Could not clear cache for {func_obj}: {exc}")
-
-
-def clear_all_caches() -> None:
-    """Clear all Streamlit data caches used by this bridge."""
-    _safe_clear_cache(get_system_health)
-    _safe_clear_cache(get_inventory)
-    _safe_clear_cache(get_identity_investigation)
-    _safe_clear_cache(get_return_risk)
-    _safe_clear_cache(get_churn_alerts)
-
-
-# -----------------------------------------------------------------------------
-# Function 1: get_system_health() -> GET /api/v1/system/status
-# -----------------------------------------------------------------------------
-
-
-@st.cache_data(ttl=2)
+# --------------------------------------------------------------------------------------------------------------
+# Reads (cached for CACHE_TTL_SECONDS)
+# --------------------------------------------------------------------------------------------------------------
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def get_system_health() -> Dict[str, Any]:
-    """
-    Fetch comprehensive system health, connectivity, and database row counts.
-
-    Maps to: GET /api/v1/system/status
-    Cached for 2 seconds to optimize UI responsiveness.
-    """
-    url = f"{get_backend_url()}/api/v1/system/status"
-    session = _get_http_session()
-    try:
-        response = session.get(url, timeout=DEFAULT_TIMEOUT)
-        if response.status_code == 200:
-            data = response.json()
-            data.setdefault("error", None)
-            return data
-        err = f"Backend returned HTTP {response.status_code}: {response.text[:200]}"
-        logger.warning(f"get_system_health failed: {err}")
-        return _empty_health(err)
-    except requests.exceptions.RequestException as exc:
-        err = f"Backend unreachable at {url}: {exc}"
-        logger.warning(err)
-        return _empty_health(err)
+    """Live PostgreSQL / Redis / Exasol status, sync freshness and row counts (`GET /system/status`)."""
+    return _read("/system/status", _empty_health)
 
 
-# -----------------------------------------------------------------------------
-# Function 2: get_inventory() -> GET /api/v1/inventory
-# -----------------------------------------------------------------------------
-
-
-@st.cache_data(ttl=2)
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def get_inventory() -> Dict[str, Any]:
-    """
-    Fetch the catalog with physical stock, OCC versions, safety buffers, and live cart counts.
-
-    Maps to: GET /api/v1/inventory
-    Cached for 2 seconds to optimize UI responsiveness.
-    """
-    url = f"{get_backend_url()}/api/v1/inventory"
-    session = _get_http_session()
-    try:
-        response = session.get(url, timeout=DEFAULT_TIMEOUT)
-        if response.status_code == 200:
-            data = response.json()
-            data.setdefault("error", None)
-            return data
-        err = f"Backend returned HTTP {response.status_code}: {response.text[:200]}"
-        logger.warning(f"get_inventory failed: {err}")
-        return _empty_inventory(err)
-    except requests.exceptions.RequestException as exc:
-        err = f"Backend unreachable at {url}: {exc}"
-        logger.warning(err)
-        return _empty_inventory(err)
+    """Every SKU with stock, OCC version, safety buffer and live cart velocity (`GET /inventory`)."""
+    return _read("/inventory", _empty_inventory)
 
 
-# -----------------------------------------------------------------------------
-# Function 3: trigger_surge(item_id) -> POST /api/v1/cart/add (simulates bot traffic)
-# -----------------------------------------------------------------------------
-
-
-def _post_single_cart_add(item_id: str, session_id: str) -> bool:
-    """Helper worker to execute a single add-to-cart request."""
-    url = f"{get_backend_url()}/api/v1/cart/add"
-    payload = {"item_id": item_id, "user_session_id": session_id}
-    try:
-        resp = _get_http_session().post(url, json=payload, timeout=(1.0, 3.0))
-        return resp.status_code == 200
-    except Exception:
-        return False
-
-
-def trigger_surge(item_id: str, count: int = 10, max_workers: int = 5) -> Dict[str, Any]:
-    """
-    Simulate bot traffic surging into carts for a specific SKU.
-
-    Maps to: POST /api/v1/cart/add
-    Fires rapid concurrent cart additions with distinct bot session IDs to update
-    Redis cart velocity and trigger the predictive safety buffer in real-time.
-
-    Invalidates get_inventory() cache so the dashboard immediately shows new velocity.
-    """
-    item_id = str(item_id).strip()
-    if not item_id:
-        return _make_error("item_id is required to trigger surge.", code=400, status_label="BAD_REQUEST")
-
-    burst_count = max(1, count)
-    sessions = [f"bot_surge_{uuid.uuid4().hex[:8]}" for _ in range(burst_count)]
-    successful = 0
-
-    with ThreadPoolExecutor(max_workers=min(max_workers, burst_count)) as pool:
-        futures = [pool.submit(_post_single_cart_add, item_id, s_id) for s_id in sessions]
-        for future in as_completed(futures):
-            if future.result():
-                successful += 1
-
-    # Invalidate cached inventory so UI renders new velocity instantly
-    _safe_clear_cache(get_inventory)
-
-    if successful == 0:
-        err = f"Failed to simulate bot surge for '{item_id}'. Backend or Redis unreachable."
-        logger.warning(err)
-        return {
-            "success": False,
-            "status": "FAILED",
-            "item_id": item_id,
-            "attempted": burst_count,
-            "successful": 0,
-            "error": err,
-        }
-
-    return {
-        "success": True,
-        "status": "SURGE_SIMULATED",
-        "item_id": item_id,
-        "attempted": burst_count,
-        "successful": successful,
-        "message": f"Successfully simulated {successful}/{burst_count} bot add-to-cart requests for {item_id}.",
-        "error": None,
-    }
-
-
-# -----------------------------------------------------------------------------
-# Function 4: execute_checkout(payload) -> POST /api/v1/checkout
-# -----------------------------------------------------------------------------
-
-
-def execute_checkout(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Execute order placement under Optimistic Concurrency Control (OCC) and safety buffer rules.
-
-    Maps to: POST /api/v1/checkout
-    Payload typically contains: item_id, quantity, user_session_id, expected_version, payment_method.
-
-    Returns the confirmation response on success (200), or a structured conflict/error dictionary
-    if stock is depleted, version collision occurs (409), or service is unreachable.
-
-    Invalidates get_inventory() cache on success.
-    """
-    if not isinstance(payload, dict):
-        return _make_error("Invalid payload format; dictionary expected.", code=400, status_label="BAD_REQUEST")
-
-    url = f"{get_backend_url()}/api/v1/checkout"
-    session = _get_http_session()
-
-    try:
-        response = session.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
-        data = response.json() if response.content else {}
-
-        if response.status_code == 200:
-            data.setdefault("success", True)
-            data.setdefault("error", None)
-            # Invalidate inventory cache so remaining stock updates in UI
-            _safe_clear_cache(get_inventory)
-            return data
-
-        detail = data.get("detail", f"Checkout failed with HTTP {response.status_code}.")
-        if response.status_code == 409:
-            return {
-                "success": False,
-                "status": "CONFLICT",
-                "error": detail,
-                "detail": detail,
-                "code": 409,
-            }
-        elif response.status_code == 404:
-            return {
-                "success": False,
-                "status": "NOT_FOUND",
-                "error": detail,
-                "detail": detail,
-                "code": 404,
-            }
-        elif response.status_code == 422:
-            return {
-                "success": False,
-                "status": "VALIDATION_ERROR",
-                "error": str(detail),
-                "detail": detail,
-                "code": 422,
-            }
-        else:
-            return {
-                "success": False,
-                "status": f"HTTP_{response.status_code}",
-                "error": detail,
-                "detail": detail,
-                "code": response.status_code,
-            }
-
-    except requests.exceptions.RequestException as exc:
-        err = f"Backend unreachable at {url}: {exc}"
-        logger.warning(err)
-        return _make_error(err, code=503, status_label="UNREACHABLE")
-
-
-# -----------------------------------------------------------------------------
-# Function 5: get_identity_investigation(customer_id) -> GET /api/v1/golden-customers/{customer_id}/investigation
-# -----------------------------------------------------------------------------
-
-
-@st.cache_data(ttl=2)
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def get_identity_investigation(customer_id: str) -> Dict[str, Any]:
-    """
-    Fetch Explainable AI (XAI) Identity Detective investigation evidence and confidence.
-
-    Maps to: GET /api/v1/golden-customers/{customer_id}/investigation
-    Cached for 2 seconds to optimize UI responsiveness.
-    """
-    cust_id = str(customer_id).strip()
-    if not cust_id:
-        return _empty_investigation("", "Customer ID cannot be empty.")
-
-    safe_id = _safe_quote(cust_id)
-    url = f"{get_backend_url()}/api/v1/golden-customers/{safe_id}/investigation"
-    session = _get_http_session()
-
-    try:
-        response = session.get(url, timeout=DEFAULT_TIMEOUT)
-        if response.status_code == 200:
-            data = response.json()
-            data.setdefault("error", None)
-            data.setdefault("found", True)
-            return data
-        elif response.status_code == 404:
-            err = f"Customer '{cust_id}' not found in Golden Record."
-            return _empty_investigation(cust_id, err)
-        else:
-            err = f"HTTP {response.status_code}: {response.text[:200]}"
-            return _empty_investigation(cust_id, err)
-    except requests.exceptions.RequestException as exc:
-        err = f"Backend unreachable at {url}: {exc}"
-        logger.warning(err)
-        return _empty_investigation(cust_id, err)
+    """Explainable identity evidence and confidence for one golden customer (`GET .../{id}/investigation`)."""
+    return _read(f"/golden-customers/{_segment(customer_id)}/investigation", _empty_investigation)
 
 
-# -----------------------------------------------------------------------------
-# Function 6: get_return_risk(user_id) -> GET /api/v1/return-risk/{user_id}
-# -----------------------------------------------------------------------------
-
-
-@st.cache_data(ttl=2)
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def get_return_risk(user_id: str) -> Dict[str, Any]:
+    """Pre-computed return risk level, policy and rationale for a shopper (`GET /return-risk/{user_id}`)."""
+    return _read(f"/return-risk/{_segment(user_id)}", lambda: _empty_return_risk(user_id))
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def get_churn_alerts(limit: int = 50, since_hours: int = 24, min_score: float = 0.0) -> Dict[str, Any]:
+    """Recent VIP churn alerts, newest first (`GET /churn/alerts`)."""
+    params = {"limit": limit, "since_hours": since_hours, "min_score": min_score}
+    return _read("/churn/alerts", lambda: _empty_alerts(since_hours), params=params)
+
+
+# --------------------------------------------------------------------------------------------------------------
+# Actions
+# --------------------------------------------------------------------------------------------------------------
+def _failed(error: Dict[str, Any], **extra: Any) -> Dict[str, Any]:
+    return {"ok": False, "message": error["message"], ERROR_KEY: error, **extra}
+
+
+def trigger_surge(item_id: str, bots: int = 1) -> Dict[str, Any]:
     """
-    Fetch pre-computed return risk level (1-5), XAI explanation, and dynamic policy for a shopper.
+    Simulate shoppers adding an item to their cart (`POST /cart/add`), one fresh bot session per request.
 
-    Maps to: GET /api/v1/return-risk/{user_id}
-    Cached for 2 seconds to optimize UI responsiveness.
+    Args:
+        item_id: SKU to add.
+        bots: number of simulated shoppers, 1 to 500.
+
+    Returns:
+        ``{"ok", "message", "requested", "succeeded", "active_carts_5m", "failures"}``. `ok` is true when at least one
+        add succeeded; ``_error`` is only set when every request failed.
     """
-    uid = str(user_id).strip()
-    if not uid:
-        return _empty_return_risk("", "User ID cannot be empty.")
+    if not item_id or not str(item_id).strip():
+        return _failed(_make_error("request_error", "Choose an item first."), requested=0, succeeded=0)
+    count = max(1, min(int(bots), MAX_SURGE_BOTS))
 
-    safe_uid = _safe_quote(uid)
-    url = f"{get_backend_url()}/api/v1/return-risk/{safe_uid}"
-    session = _get_http_session()
+    def add_one(_: int) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        payload = {"item_id": item_id, "user_session_id": f"bot-{uuid.uuid4().hex[:12]}"}
+        data, error, _status = _call("POST", "/cart/add", body=payload, timeout=WRITE_TIMEOUT)
+        return data, error
 
-    try:
-        response = session.get(url, timeout=DEFAULT_TIMEOUT)
-        if response.status_code == 200:
-            data = response.json()
-            data.setdefault("error", None)
-            return data
-        err = f"Backend returned HTTP {response.status_code}: {response.text[:200]}"
-        logger.warning(f"get_return_risk failed: {err}")
-        return _empty_return_risk(uid, err)
-    except requests.exceptions.RequestException as exc:
-        err = f"Backend unreachable at {url}: {exc}"
-        logger.warning(err)
-        return _empty_return_risk(uid, err)
+    with ThreadPoolExecutor(max_workers=min(SURGE_WORKERS, count)) as pool:
+        outcomes = list(pool.map(add_one, range(count)))
 
+    successes = [data for data, error in outcomes if error is None and data is not None]
+    failures = [error for _, error in outcomes if error is not None]
+    if successes:
+        _invalidate(get_inventory)
 
-# -----------------------------------------------------------------------------
-# Function 7: get_churn_alerts() -> GET /api/v1/churn/alerts
-# -----------------------------------------------------------------------------
-
-
-@st.cache_data(ttl=2)
-def get_churn_alerts(
-    limit: int = 50,
-    since_hours: int = 24,
-    min_score: float = 0.0,
-) -> Dict[str, Any]:
-    """
-    Fetch recent VIP churn alerts generated by Exasol NLP sentiment scoring.
-
-    Maps to: GET /api/v1/churn/alerts
-    Supports limit, since_hours, and min_score query parameters.
-    Cached for 2 seconds to optimize UI responsiveness.
-    """
-    params = {
-        "limit": max(1, min(limit, 200)),
-        "since_hours": max(1, min(since_hours, 2160)),
-        "min_score": max(0.0, min(min_score, 1.0)),
+    active = max((s.get("active_carts_5m", 0) for s in successes), default=None)
+    result: Dict[str, Any] = {
+        "ok": bool(successes),
+        "message": (
+            f"Added {len(successes)} of {count} simulated shoppers to the cart."
+            if successes
+            else failures[0]["message"]
+        ),
+        "requested": count,
+        "succeeded": len(successes),
+        "active_carts_5m": active,
+        "failures": failures[:5],
     }
-    url = f"{get_backend_url()}/api/v1/churn/alerts"
-    session = _get_http_session()
-
-    try:
-        response = session.get(url, params=params, timeout=DEFAULT_TIMEOUT)
-        if response.status_code == 200:
-            data = response.json()
-            data.setdefault("error", None)
-            return data
-        err = f"Backend returned HTTP {response.status_code}: {response.text[:200]}"
-        logger.warning(f"get_churn_alerts failed: {err}")
-        return _empty_alerts(err, since_hours=since_hours)
-    except requests.exceptions.RequestException as exc:
-        err = f"Backend unreachable at {url}: {exc}"
-        logger.warning(err)
-        return _empty_alerts(err, since_hours=since_hours)
+    if not successes:
+        result[ERROR_KEY] = failures[0]
+    return result
 
 
-# -----------------------------------------------------------------------------
-# Function 8: approve_churn_action(ticket_id, user) -> POST /api/v1/churn/alerts/{ticket_id}/approve
-# -----------------------------------------------------------------------------
+def _checkout_outcome(status_code: Optional[int], error: Optional[Dict[str, Any]]) -> str:
+    if error is None:
+        return "SUCCESS"
+    if status_code is None:
+        return "TIMEOUT" if error["kind"] == "timeout" else "UNREACHABLE"
+    if status_code == 409:
+        text = error["message"].lower()
+        return "RESERVED_SAFETY_BUFFER" if ("high demand" in text or "reserved" in text) else "OCC_CONFLICT"
+    return {404: "NOT_FOUND", 422: "INVALID_REQUEST"}.get(status_code, "SERVER_ERROR")
 
 
-def approve_churn_action(ticket_id: str, user: str = "supervisor") -> Dict[str, Any]:
+def execute_checkout(payload: Mapping[str, Any]) -> Dict[str, Any]:
     """
-    Approve and execute a recommended VIP retention action (governance & idempotency).
+    Place an order (`POST /checkout`).
 
-    Maps to: POST /api/v1/churn/alerts/{ticket_id}/approve
-    Passes {"approved_by": user} in the JSON body.
-    Invalidates get_churn_alerts() cache upon execution so the table updates immediately.
+    Args:
+        payload: the CheckoutRequest fields, e.g. ``{"item_id", "quantity", "user_session_id", "user_id", ...}``.
+
+    Returns:
+        ``{"ok", "outcome", "status_code", "message", "data"}``. `outcome` is one of SUCCESS, RESERVED_SAFETY_BUFFER
+        (HTTP 409, predictive buffer), OCC_CONFLICT (HTTP 409, version collision), NOT_FOUND, INVALID_REQUEST,
+        SERVER_ERROR, TIMEOUT or UNREACHABLE. `data` holds the backend response on success.
     """
-    t_id = str(ticket_id).strip()
-    if not t_id:
-        return _make_error("ticket_id is required for approval.", code=400, status_label="BAD_REQUEST")
+    if not isinstance(payload, Mapping):
+        error = _make_error("request_error", "The checkout request must be a set of fields.")
+        return _failed(error, outcome="INVALID_REQUEST", status_code=None, data={})
 
-    safe_tid = _safe_quote(t_id)
-    url = f"{get_backend_url()}/api/v1/churn/alerts/{safe_tid}/approve"
-    payload = {"approved_by": str(user).strip() or "supervisor"}
-    session = _get_http_session()
+    data, error, status_code = _call("POST", "/checkout", body=payload, timeout=WRITE_TIMEOUT)
+    outcome = _checkout_outcome(status_code, error)
+    if error is not None:
+        return _failed(error, outcome=outcome, status_code=status_code, data={})
 
-    try:
-        response = session.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
-        data = response.json() if response.content else {}
+    _invalidate(get_inventory, get_return_risk)
+    return {
+        "ok": True,
+        "outcome": outcome,
+        "status_code": status_code,
+        "message": data.get("message", "Order placed."),
+        "data": data,
+    }
 
-        if response.status_code == 200:
-            data.setdefault("success", True)
-            data.setdefault("error", None)
-            # Invalidate churn alerts cache so updated status renders instantly
-            _safe_clear_cache(get_churn_alerts)
-            return data
-        elif response.status_code == 404:
-            err = f"Alert ticket '{t_id}' not found."
-            return {
-                "ticket_id": t_id,
-                "status": "NOT_FOUND",
-                "success": False,
-                "error": err,
-                "message": err,
-                "code": 404,
-            }
-        else:
-            err = data.get("detail", f"Approval failed with HTTP {response.status_code}.")
-            return {
-                "ticket_id": t_id,
-                "status": "FAILED",
-                "success": False,
-                "error": err,
-                "message": err,
-                "code": response.status_code,
-            }
-    except requests.exceptions.RequestException as exc:
-        err = f"Backend unreachable at {url}: {exc}"
-        logger.warning(err)
-        return {
-            "ticket_id": t_id,
-            "status": "UNREACHABLE",
-            "success": False,
-            "error": err,
-            "message": err,
-            "code": 503,
-        }
+
+def approve_churn_action(ticket_id: str, user: str) -> Dict[str, Any]:
+    """
+    Approve and execute the recommended retention action for an alert (`POST /churn/alerts/{ticket_id}/approve`).
+
+    Approving twice is safe: the backend answers 200 "Action already executed.", reported here as
+    ``already_executed: True``.
+
+    Returns:
+        ``{"ok", "message", "already_executed", "data"}``; ``_error`` is set when the approval failed.
+    """
+    if not ticket_id or not str(ticket_id).strip() or not user or not str(user).strip():
+        error = _make_error("request_error", "A ticket and the approving operator are both required.")
+        return _failed(error, already_executed=False, data={})
+
+    data, error, _status = _call(
+        "POST", f"/churn/alerts/{_segment(ticket_id)}/approve", body={"approved_by": user}, timeout=WRITE_TIMEOUT
+    )
+    if error is not None:
+        message = "That alert no longer exists." if error["status_code"] == 404 else error["message"]
+        return _failed({**error, "message": message}, already_executed=False, data={})
+
+    _invalidate(get_churn_alerts)
+    message = data.get("message", "Action approved.")
+    return {"ok": True, "message": message, "already_executed": "already executed" in message.lower(), "data": data}

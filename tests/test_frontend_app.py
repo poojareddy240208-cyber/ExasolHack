@@ -13,6 +13,7 @@ from streamlit.testing.v1 import AppTest
 
 APP = str(Path(__file__).resolve().parent.parent / "frontend" / "app.py")
 BRIDGE = "frontend.services.live_bridge"
+STATUS_PROBE = "frontend.services.status_probe"
 
 HEALTH_UP = {
     "status": "HEALTHY",
@@ -186,7 +187,8 @@ def run_app(
         "approve_churn_action": MagicMock(return_value=approval or APPROVED),
     }
     for name, mock in mocks.items():
-        stack.enter_context(patch(f"{BRIDGE}.{name}", mock))
+        target = STATUS_PROBE if name == "get_system_health" else BRIDGE
+        stack.enter_context(patch(f"{target}.{name}", mock))
     app = AppTest.from_file(APP, default_timeout=20)
     app.run()
     return app, mocks
@@ -675,3 +677,39 @@ def test_radar_tolerates_missing_fields_and_escapes_text(launch):
     assert not app.exception
     assert "Not rated" in page and "Not specified" in page and "Weird status" in page
     assert "<script>" not in page and "&lt;script&gt;" in page
+
+
+# ------------------------------------------------------------------ guide, activity log and new controls
+def test_surge_ticks_the_demo_guide_and_is_logged(launch):
+    app, _ = launch()
+    assert app.checkbox(key="guide_surge").value is False
+    app.button(key="surge").click().run()
+    assert app.checkbox(key="guide_surge").value is True
+    assert any("Surge: 45 simulated shoppers" in line for line in app.session_state["activity_log"])
+    assert "1 of 5 steps done" in texts(app.sidebar.markdown) + str([p.text for p in app.sidebar.get("progress")])
+
+
+def test_a_refused_order_ticks_the_blocked_step(launch):
+    app, _ = launch(checkout={"success": False, "status": "CONFLICT", "error": "Item is in high demand, reserved."})
+    place_order(app)
+    assert app.checkbox(key="guide_blocked").value is True
+
+
+def test_inventory_chart_view_replaces_the_table(launch):
+    app, _ = launch()
+    app.get("segmented_control")[0].set_value("Chart").run()
+    assert not app.exception
+    assert "osx-table" not in texts(app.tabs[0].markdown)
+    assert any("chart" in str(getattr(el, "type", "")) for el in app.tabs[0])
+
+
+def test_radar_search_and_sort_narrow_the_list(launch):
+    app, _ = launch()
+    app.text_input(key="radar_search").set_value("wedding").run()
+    page = texts(app.tabs[3].markdown)
+    assert "ZD-DEMO-WEDDING-002" in page and "ZD-DEMO-FIT-001" not in page
+    app.text_input(key="radar_search").set_value("nobody-matches").run()
+    assert "No tickets match this filter." in texts(app.tabs[3].info)
+    app.text_input(key="radar_search").set_value("").run()
+    app.selectbox(key="radar_sort").select("Highest churn score").run()
+    assert not app.exception

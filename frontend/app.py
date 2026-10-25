@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import pandas as pd
 import streamlit as st
 
 # `streamlit run frontend/app.py` puts only the frontend folder on sys.path, so add the repository root once.
@@ -24,15 +25,16 @@ if str(_REPO_ROOT) not in sys.path:
 
 from frontend.services.live_bridge import (  # noqa: E402
     approve_churn_action,
+    clear_all_caches,
     error_message,
     execute_checkout,
     get_churn_alerts,
     get_identity_investigation,
     get_inventory,
     get_return_risk,
-    get_system_health,
     trigger_surge,
 )
+from frontend.services.status_probe import get_system_health  # noqa: E402
 
 st.set_page_config(page_title="OmniSync XAI", page_icon="🛰️", layout="wide", initial_sidebar_state="expanded")
 
@@ -76,6 +78,24 @@ def int_or_zero(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+GUIDE_STEPS = (
+    ("surge", "Inventory: press Simulate TikTok Surge"),
+    ("blocked", "Inventory: place an order the safeguards refuse"),
+    ("identity", "Identity: open the detective's evidence"),
+    ("returns", "Returns: compare Customer A and Customer B"),
+    ("approve", "Radar: approve a ticket, then approve it again"),
+)
+
+
+def log_event(text: str, guide_step: Optional[str] = None) -> None:
+    """Remember what the person just did (shown in the sidebar) and tick the matching demo-guide step."""
+    events = st.session_state.setdefault("activity_log", [])
+    events.append(f"{datetime.now().strftime('%H:%M:%S')}  {text}")
+    del events[:-30]
+    if guide_step:
+        st.session_state[f"guide_{guide_step}"] = True
 
 
 def eye(title: str, body: str) -> None:
@@ -151,6 +171,10 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     live_status_panel()
+    if st.button("Refresh now", key="refresh_now", help="Drop cached answers and read everything again."):
+        clear_all_caches()
+        get_system_health.clear()
+        st.rerun()
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -250,6 +274,8 @@ def run_surge(sku: str, name: str, carts_before: Optional[int]) -> None:
         outcomes.append(_trigger_surge_burst(sku))
         bar.progress((done + 1) / SURGE_ROUNDS, text=f"Wave {done + 1} of {SURGE_ROUNDS} reached {name}'s cart")
     sent = sum(int_or_zero(o.get("succeeded", o.get("successful", 0))) for o in outcomes)
+    if sent:
+        log_event(f"Surge: {sent} simulated shoppers sent to {name}", "surge")
     st.session_state["surge_flash"] = {
         "sku": sku,
         "name": name,
@@ -308,7 +334,22 @@ def inventory_view() -> None:
             "Live cart counts are unavailable because Redis is not answering. Stock and holds are still correct."
         )
 
-    st.markdown(inventory_table(items), unsafe_allow_html=True)
+    mode = st.segmented_control(
+        "View", ["Table", "Chart"], default="Table", key="inventory_mode", help="Switch between numbers and bars."
+    )
+    if mode == "Chart":
+        chart = pd.DataFrame(
+            {
+                "Available": [int_or_zero(i.get("available_stock")) for i in items],
+                "Held back": [
+                    min(int_or_zero(i.get("virtual_safety_buffer")), int_or_zero(i.get("stock"))) for i in items
+                ],
+            },
+            index=[str(i.get("name") or i.get("item_id")) for i in items],
+        )
+        st.bar_chart(chart, color=["#2d8b8b", "#e76f51"], horizontal=True)
+    else:
+        st.markdown(inventory_table(items), unsafe_allow_html=True)
     st.markdown(
         '<div class="osx-legend"><b class="a">Teal</b> is stock that can be sold. <b class="h">Orange</b> is held '
         "back for the predicted surge.</div>",
@@ -400,6 +441,10 @@ def inventory_tab() -> None:
                 payload["expected_version"] = max(0, int_or_zero(snapshot.get("version")) - 1)
             result = execute_checkout(payload)
             kind = classify_checkout(result)
+            log_event(
+                f"Checkout of {int(quantity)} x {sku}: {kind}",
+                "blocked" if kind in ("buffer", "occ") else None,
+            )
             st.session_state["checkout_flash"] = {
                 "result": result,
                 "kind": kind,
@@ -832,13 +877,30 @@ def radar_tab() -> None:
         key="radar_filter",
         help="Narrow the list of tickets below.",
     )
+    search_col, sort_col = st.columns(2, gap="large")
+    query = (
+        search_col.text_input("Search tickets", key="radar_search", placeholder="Ticket ID or customer email")
+        .strip()
+        .lower()
+    )
+    order = sort_col.selectbox("Sort by", ["Needs attention first", "Highest churn score", "Newest"], key="radar_sort")
     show_approval_result()
 
-    def triage(alert: Dict[str, Any]) -> Tuple[bool, int, float]:
+    def triage(alert: Dict[str, Any]):
+        if order == "Highest churn score":
+            return (-float(alert.get("churn_score") or 0),)
+        if order == "Newest":
+            try:
+                stamp = datetime.fromisoformat(str(alert.get("created_at")).replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                stamp = 0.0
+            return (-stamp,)
         rank = URGENCY.get(str(alert.get("urgency")), ("", "", -1))[2]
         return (alert.get("status") == "ACTION_EXECUTED", -rank, -float(alert.get("churn_score") or 0))
 
     def visible(alert: Dict[str, Any]) -> bool:
+        if query and query not in f"{alert.get('ticket_id')} {alert.get('customer_email')}".lower():
+            return False
         if show_filter == "Waiting":
             return alert.get("status") == "PENDING_REVIEW"
         if show_filter == "Executed":
@@ -856,6 +918,8 @@ def radar_tab() -> None:
         button_col, tip_col = st.columns([8, 1], vertical_alignment="center")
         if button_col.button("Approve & Execute Action", key=f"approve_{ticket_id}"):
             result = approve_churn_action(ticket_id, approver)
+            if not (result.get("success") is False or result.get("error")):
+                log_event(f"{approver} approved {ticket_id}", "approve")
             st.session_state["approval_flash"] = {"ticket": ticket_id, "result": result, "user": approver}
             st.rerun()
         with tip_col:
@@ -883,6 +947,71 @@ def radar_tab() -> None:
 # --------------------------------------------------------------------------------------------------------------
 # Tabs
 # --------------------------------------------------------------------------------------------------------------
+def ticker_html() -> str:
+    """A scrolling strip of live facts: stock and carts per item, tickets waiting, services that are down."""
+    ticks: List[str] = []
+    for item in get_inventory().get("items") or []:
+        held = int_or_zero(item.get("virtual_safety_buffer"))
+        tone = "bad" if held else ""
+        ticks.append(
+            f'<span class="osx-tick {tone}">{esc(item.get("name") or item.get("item_id"))}'
+            f"<b>{fmt(item.get('available_stock'))} left, {fmt(item.get('active_carts_5m'))} carts</b></span>"
+        )
+    alerts = get_churn_alerts().get("alerts") or []
+    waiting = sum(1 for a in alerts if a.get("status") == "PENDING_REVIEW")
+    ticks.append(f'<span class="osx-tick {"warn" if waiting else ""}">Tickets waiting<b>{fmt(waiting)}</b></span>')
+    services = get_system_health().get("services") or {}
+    down = [label for key, label in SERVICES if (services.get(key) or {}).get("status") != "UP"]
+    ticks.append(
+        f'<span class="osx-tick {"bad" if down else ""}">Services down<b>{esc(", ".join(down) if down else "none")}</b></span>'
+    )
+    track = "".join(ticks)
+    return f'<div class="osx-ticker"><div class="osx-ticker-track">{track}{track}{track}{track}</div></div>'
+
+
+HOW_IT_WORKS = (
+    ("1", "Protect stock", "Forecasts a rush and holds stock back, so checkout never oversells."),
+    ("2", "Know the shopper", "Matches anonymous visits to one customer and shows every clue."),
+    ("3", "Judge returns fairly", "Asks why items came back before penalising anyone."),
+    ("4", "Save top customers", "Reads support tickets and recommends a fix a person approves."),
+)
+
+
+def hero() -> None:
+    """Landing block: headline, calls to action, data-source note and the four-step explainer."""
+    st.markdown(ticker_html(), unsafe_allow_html=True)
+    health = get_system_health()
+    down = [label for key, label in SERVICES if ((health.get("services") or {}).get(key) or {}).get("status") != "UP"]
+    if health.get("error"):
+        note, tone = "The backend is not answering, so the numbers below may be empty.", "warn"
+    elif down:
+        note = (
+            f"Live data from the API. {', '.join(down)} is offline, so anything it computes (demand holds, "
+            "identity scores, return risk, churn scores) shows its last saved value."
+        )
+        tone = "warn"
+    else:
+        note, tone = "Live data from the API. Every service is answering.", ""
+    steps = "".join(
+        f'<div class="osx-step"><div class="osx-step-n">Step {n}</div><div class="osx-step-t">{esc(t)}</div>'
+        f'<div class="osx-step-d">{esc(d)}</div></div>'
+        for n, t, d in HOW_IT_WORKS
+    )
+    st.markdown(
+        '<div class="osx-eyebrow">EXPLAINABLE RETAIL OPERATIONS · LIVE FROM POSTGRESQL, REDIS AND EXASOL</div>'
+        '<div class="osx-hero-title">Which shoppers and stock need <em>your attention</em> right now?</div>'
+        '<div class="osx-hero-sub">OmniSync watches stock, identities, returns and support tickets, scores each '
+        "one, and tells you why. Click any section to see exactly how it decided.</div>"
+        '<div class="osx-cta-row"><a class="osx-cta primary" href="#osx-workspace">Open the live demo</a>'
+        '<a class="osx-cta ghost" href="#osx-how">How does it work?</a></div>'
+        f'<div class="osx-banner {tone}">{esc(note)}</div>'
+        f'<div id="osx-how"></div><div class="osx-steps">{steps}</div><div id="osx-workspace"></div>',
+        unsafe_allow_html=True,
+    )
+
+
+hero()
+
 tab_inventory, tab_identity, tab_returns, tab_radar = st.tabs(
     ["Inventory Surge", "Identity Detective", "Context Returns", "NLP Ticket Radar"]
 )
@@ -895,3 +1024,20 @@ with tab_returns:
     returns_tab()
 with tab_radar:
     radar_tab()
+
+
+# --------------------------------------------------------------------------------------------------------------
+# Sidebar, second half: demo guide and activity log. It is drawn last so it already knows what happened this run.
+# --------------------------------------------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown('<div class="osx-section">Demo guide</div>', unsafe_allow_html=True)
+    finished = sum(1 for key, _ in GUIDE_STEPS if st.session_state.get(f"guide_{key}"))
+    st.progress(finished / len(GUIDE_STEPS), text=f"{finished} of {len(GUIDE_STEPS)} steps done")
+    for key, label in GUIDE_STEPS:
+        st.checkbox(label, key=f"guide_{key}")
+    with st.expander("Activity log"):
+        events = st.session_state.get("activity_log") or []
+        if events:
+            st.markdown("\n".join(f"- `{line}`" for line in reversed(events[-10:])))
+        else:
+            st.caption("Nothing yet. Actions you take on this page are listed here.")

@@ -7,7 +7,7 @@ ever raises, the empty structures returned on failure, checkout outcome classifi
 with the missing routes listed, on a branch whose backend does not have them yet).
 """
 
-from unittest.mock import patch,MagicMock
+from unittest.mock import patch, MagicMock
 
 import pytest
 import requests
@@ -219,7 +219,6 @@ def test_a_failed_action_keeps_the_cache(backend):
 # -----------------------------------------------------------------------------
 
 
-
 def test_get_identity_investigation_success():
     customer_id = "CUST-GOLDEN-001"
     mock_payload = {
@@ -230,10 +229,7 @@ def test_get_identity_investigation_success():
             {"node_id": "SHOPIFY:usr_1", "type": "SHOPIFY", "confidence": 1.0},
             {"node_id": "DEVICE:dev_1", "type": "DEVICE", "confidence": 0.98},
         ],
-        "xai_rationale": (
-            "High confidence match via deterministic email "
-            "and shared device finger-print."
-        ),
+        "xai_rationale": ("High confidence match via deterministic email " "and shared device finger-print."),
     }
 
     mock_resp = MagicMock()
@@ -247,8 +243,7 @@ def test_get_identity_investigation_success():
         mock_request.assert_called_once()
         assert mock_request.call_args.args[0] == "GET"
         assert mock_request.call_args.args[1] == (
-            "http://api:8000/api/v1/"
-            "golden-customers/CUST-GOLDEN-001/investigation"
+            "http://api:8000/api/v1/" "golden-customers/CUST-GOLDEN-001/investigation"
         )
 
     assert result["golden_customer_id"] == customer_id
@@ -272,6 +267,7 @@ def test_get_identity_investigation_404():
     assert result["confidence_score"] == 0
     assert bridge.is_error(result) is True
     assert "not found" in bridge.error_message(result).lower()
+
 
 # ------------------------------------------------------------------ surge simulation
 def test_surge_adds_one_distinct_bot_session_per_request(backend):

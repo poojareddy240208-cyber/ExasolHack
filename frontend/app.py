@@ -78,6 +78,20 @@ def int_or_zero(value: Any) -> int:
         return 0
 
 
+def eye(title: str, body: str) -> None:
+    """A small eye button that opens a plain-language note about the thing next to it."""
+    with st.popover("👁", help=f"What is this? {title}"):
+        st.markdown(f"**{title}**\n\n{body}")
+
+
+def heading(text: str, tip_title: str, tip_body: str, level: int = 3) -> None:
+    """A heading with an eye button beside it."""
+    title, button = st.columns([14, 1] if level <= 3 else [5, 1], vertical_alignment="center")
+    title.markdown(f"{'#' * level} {text}")
+    with button:
+        eye(tip_title, tip_body)
+
+
 # --------------------------------------------------------------------------------------------------------------
 # Sidebar: brand and live service status
 # --------------------------------------------------------------------------------------------------------------
@@ -119,6 +133,14 @@ def status_panel() -> None:
     else:
         note = _freshness_text(health)
     st.markdown(f'<div class="osx-note">{esc(note)}</div>', unsafe_allow_html=True)
+    eye(
+        "System status",
+        "Three lights for the three databases behind this page.\n\n"
+        "- **PostgreSQL** holds orders and stock (the live shop).\n"
+        "- **Redis** counts shopping carts in the last 5 minutes.\n"
+        "- **Exasol** is the analytics brain: demand forecasts, identity matching, return risk and churn scores.\n\n"
+        "Green means it answered; the time is how long it took. The lights refresh every 5 seconds.",
+    )
 
 
 live_status_panel = st.fragment(run_every="5s")(status_panel) if hasattr(st, "fragment") else status_panel
@@ -208,6 +230,8 @@ def show_checkout_result(flash: Dict[str, Any]) -> None:
         st.error("Cannot reach the backend. Check that the API container is running, then try again.")
     else:
         st.error(f"The order failed: {error_message(result)}")
+
+
 def _trigger_surge_burst(sku: str) -> Dict[str, Any]:
     """Call the surge bridge while supporting the app's existing count keyword."""
     try:
@@ -217,22 +241,20 @@ def _trigger_surge_burst(sku: str) -> Dict[str, Any]:
             raise
         return trigger_surge(sku, bots=SURGE_SHOPPERS_PER_ROUND)
 
+
 def run_surge(sku: str, name: str, carts_before: Optional[int]) -> None:
     """Send three bursts of simulated shoppers, remember the outcome and redraw so the cart spike is visible."""
-    with st.spinner(f"Sending simulated shoppers to {name}..."):
-        outcomes = [
-    _trigger_surge_burst(sku)
-    for _ in range(SURGE_ROUNDS)
-]
-    sent = sum(
-    int_or_zero(o.get("succeeded", o.get("successful", 0)))
-    for o in outcomes
-)
+    outcomes = []
+    bar = st.progress(0, text=f"Sending simulated shoppers to {name}...")
+    for done in range(SURGE_ROUNDS):
+        outcomes.append(_trigger_surge_burst(sku))
+        bar.progress((done + 1) / SURGE_ROUNDS, text=f"Wave {done + 1} of {SURGE_ROUNDS} reached {name}'s cart")
+    sent = sum(int_or_zero(o.get("succeeded", o.get("successful", 0))) for o in outcomes)
     st.session_state["surge_flash"] = {
         "sku": sku,
         "name": name,
         "sent": sent,
-        "attempted": sum(int_or_zero(o.get("attempted")) for o in outcomes),
+        "attempted": sum(int_or_zero(o.get("requested", o.get("attempted"))) for o in outcomes),
         "before": carts_before,
         "error": None if sent else error_message(outcomes[-1]),
     }
@@ -253,13 +275,8 @@ def show_surge_result(items_by_sku: Dict[str, Dict[str, Any]]) -> None:
     )
 
 
-def inventory_tab() -> None:
-    st.markdown("### Inventory surge")
-    st.markdown(
-        '<p class="osx-lede">The model predicts demand for the next 15 minutes and reserves stock ahead of it. '
-        "Reserved holds are that stock. Checkout can only sell what is left over.</p>",
-        unsafe_allow_html=True,
-    )
+def inventory_view() -> None:
+    """Numbers, table and legend. Runs as a fragment so the Live switch can refresh it without touching the forms."""
     inventory = get_inventory()
     items: List[Dict[str, Any]] = inventory.get("items") or []
 
@@ -297,13 +314,57 @@ def inventory_tab() -> None:
         "back for the predicted surge.</div>",
         unsafe_allow_html=True,
     )
+    eye(
+        "Reading the numbers and the table",
+        "- **Physical stock**: units on the shelf right now.\n"
+        "- **Reserved holds**: units the model is keeping back because it expects a rush in the next 15 minutes.\n"
+        "- **Available to sell**: stock minus holds. This is all a shopper can actually buy.\n"
+        "- **Active carts**: shoppers who added the item in the last 5 minutes (from Redis). The small arrow "
+        "shows the change since the last refresh.\n"
+        "- **Version**: a counter that goes up with every sale. It powers the optimistic lock (see Quick checkout).\n"
+        "- **Stock split bar**: teal is sellable, orange is held back.",
+    )
+
+
+def inventory_tab() -> None:
+    heading(
+        "Inventory surge",
+        "Inventory surge",
+        "Shows what happens to stock when a product suddenly goes viral. The model forecasts demand and reserves "
+        "stock ahead of time, so a rush cannot sell more than you really have.",
+    )
+    st.markdown(
+        '<p class="osx-lede">The model predicts demand for the next 15 minutes and reserves stock ahead of it. '
+        "Reserved holds are that stock. Checkout can only sell what is left over.</p>",
+        unsafe_allow_html=True,
+    )
+    live_col, tip_col = st.columns([14, 1], vertical_alignment="center")
+    live = live_col.toggle("Live updates (refresh every 3 seconds)", key="live_inventory")
+    with tip_col:
+        eye(
+            "Live updates",
+            "Turn this on, then press the surge button and watch the cart counts and holds change on their own. "
+            "Turn it off to freeze the numbers.",
+        )
+    st.fragment(run_every="3s" if live else None)(inventory_view)()
+
+    inventory = get_inventory()
+    items: List[Dict[str, Any]] = inventory.get("items") or []
+    if inventory.get("error") or not items:
+        return
 
     by_sku = {str(i.get("item_id")): i for i in items}
     show_surge_result(by_sku)
 
     left, right = st.columns(2, gap="large")
     with left:
-        st.markdown("#### Simulate a surge")
+        heading(
+            "Simulate a surge",
+            "Simulate a surge",
+            "Sends three waves of 15 fake shoppers who each add the chosen item to a cart, like a TikTok video "
+            "going viral. Watch Active carts jump and, once Exasol is running, Reserved holds grow.",
+            level=4,
+        )
         st.caption(f"Sends {SURGE_ROUNDS * SURGE_SHOPPERS_PER_ROUND} simulated shoppers to one item's cart.")
         target = st.selectbox(
             "Item to surge", list(by_sku), format_func=lambda s: sku_label(by_sku[s]), key="surge_item"
@@ -312,7 +373,16 @@ def inventory_tab() -> None:
             run_surge(target, str(by_sku[target].get("name") or target), by_sku[target].get("active_carts_5m"))
 
     with right:
-        st.markdown("#### Quick checkout")
+        heading(
+            "Quick checkout",
+            "Quick checkout",
+            "Tries to buy an item and shows which safeguard answered.\n\n"
+            "- **Virtual safety buffer**: refuses to sell stock the model has reserved for the surge.\n"
+            "- **Optimistic lock**: every item has a version number. If two buyers read the same version, only the "
+            "first sale wins and the second is told to retry. Tick the box to fake an out-of-date version and see it.\n"
+            "- **Stock check**: never sells more than exists.",
+            level=4,
+        )
         st.caption("Try to buy an item and see which safeguard answers.")
         with st.form("quick_checkout"):
             sku = st.selectbox("Item", list(by_sku), format_func=lambda s: sku_label(by_sku[s]), key="checkout_item")
@@ -376,14 +446,34 @@ def evidence_panel(title: str, lines: List[str], tone: str, empty_text: str) -> 
     return f'<div class="osx-evi {tone}">{heading}<ul>{body}</ul></div>'
 
 
+def _use_example_customer() -> None:
+    picked = st.session_state.get("example_customer")
+    if picked:
+        st.session_state["investigation_customer"] = picked
+
+
 def identity_tab() -> None:
-    st.markdown("### Identity detective")
+    heading(
+        "Identity detective",
+        "Identity detective",
+        "Shoppers often browse as anonymous guests on one device and buy as themselves on another. The detective "
+        "scores how likely two records are the same person and lists the clues for and against. It never merges "
+        "on a hunch: a person reviews strong candidates first.",
+    )
     st.markdown(
         '<p class="osx-lede">When separate records might belong to one person, the detective shows how sure it is '
         "and why. Nothing is merged on a hunch: every link lists what supports it and what argues against it.</p>",
         unsafe_allow_html=True,
     )
-    customer_id = st.text_input("Customer ID", value=DEMO_CUSTOMER_ID, key="investigation_customer").strip()
+    st.session_state.setdefault("investigation_customer", DEMO_CUSTOMER_ID)
+    st.pills(
+        "Try an example",
+        [DEMO_CUSTOMER_ID, "UNKNOWN-001"],
+        key="example_customer",
+        on_change=_use_example_customer,
+        help="One click fills the box: the demo shopper, or an ID that does not exist.",
+    )
+    customer_id = st.text_input("Customer ID", key="investigation_customer").strip()
     if not customer_id:
         st.info("Enter a customer ID to see the investigation.")
         return
@@ -406,6 +496,13 @@ def identity_tab() -> None:
     status_text = DECISION_LABELS.get(status) or status.replace("_", " ").capitalize() or "No decision yet"
     ring, summary = st.columns([1, 2], gap="large")
     ring.markdown(confidence_ring(score), unsafe_allow_html=True)
+    with ring:
+        eye(
+            "Match confidence",
+            "How sure the detective is that the anonymous activity belongs to this customer.\n\n"
+            "- **85% and up**: very likely the same person.\n- **60 to 84%**: possible, needs a closer look.\n"
+            "- **Below 60%**: probably different people.\n\nPromo-code leaks alone can never push a match over the line.",
+        )
     summary.markdown(
         f'<div class="osx-verdict">{esc(confidence_style(score)["verdict"])}</div>'
         f'<p class="osx-lede">Investigating {esc(customer_id)}.</p>'
@@ -413,7 +510,14 @@ def identity_tab() -> None:
         unsafe_allow_html=True,
     )
 
-    st.markdown("#### Why the detective thinks so")
+    heading(
+        "Why the detective thinks so",
+        "Evidence",
+        "**Supporting evidence** are clues that link the records (same cart, same promo code, similar timing). "
+        "**Counter-evidence** are clues that argue against it (different language, no shared email). The score "
+        "weighs both.",
+        level=4,
+    )
     supporting = [str(line) for line in result.get("supporting_evidence") or []]
     counter = [str(line) for line in result.get("counter_evidence") or []]
     good, bad = st.columns(2, gap="large")
@@ -485,6 +589,12 @@ def return_column(title: str, role: str, intro: str, user_id: str) -> None:
     rate_box.metric("Raw return rate", pct(rate), help="Returns divided by purchases over the last 6 months.")
     level_box.metric("Risk level", f"Level {level}", help="The level after the model looks at why items came back.")
     st.markdown(level_scale(level), unsafe_allow_html=True)
+    eye(
+        "Raw rate vs risk level",
+        "The **raw return rate** is simply returns divided by purchases. The **risk level** (1 to 5) is what the "
+        "model concludes after asking *why* each item came back. Level 1 gets free returns; level 5 gets a "
+        "restocking fee, no cash on delivery and a human review.",
+    )
     if raw_level is not None:
         st.markdown(
             f'<div class="osx-compare">By raw rate alone this shopper would be <b>Level {raw_level}</b>. '
@@ -498,6 +608,11 @@ def return_column(title: str, role: str, intro: str, user_id: str) -> None:
         f'<div class="osx-xai {tone}"><div class="osx-xai-title" role="heading" aria-level="4">Why this level</div>'
         f'<p class="osx-xai-text">{esc(explanation)}</p></div>',
         unsafe_allow_html=True,
+    )
+    eye(
+        "Why this level",
+        "The model's own explanation in plain words: how many returns were the shopper's choice and how many were "
+        "the store's or supplier's fault. Nothing here is hidden in a black box.",
     )
     if risk.get("human_review_required"):
         st.markdown(
@@ -529,15 +644,30 @@ def return_column(title: str, role: str, intro: str, user_id: str) -> None:
 
 
 def returns_tab() -> None:
-    st.markdown("### Context-aware returns")
+    heading(
+        "Context-aware returns",
+        "Context-aware returns",
+        "Compares two shoppers with similarly high return rates. One was unlucky (a defective supplier batch), the "
+        "other abuses the policy (wearing items, then returning them). The model treats them differently and shows "
+        "why. Type another shopper's ID below to check them too.",
+    )
     st.markdown(
         '<p class="osx-lede">A plain return rate treats every return the same. This model also asks why the item '
         "came back, so a run of defective-batch returns does not punish the shopper, while repeated wardrobing "
         "does.</p>",
         unsafe_allow_html=True,
     )
-    columns = st.columns(2, gap="large")
-    for column, (user_id, role, intro) in zip(columns, RETURN_DEMO_CUSTOMERS):
+    other = st.text_input(
+        "Check another shopper (optional)",
+        key="return_lookup",
+        placeholder="Type a shopper ID, for example Customer A",
+        help="Adds a third column for that shopper.",
+    ).strip()
+    people = list(RETURN_DEMO_CUSTOMERS)
+    if other and other not in {p[0] for p in people}:
+        people.append((other, "Your lookup", "Looked up on request."))
+    columns = st.columns(len(people), gap="large")
+    for column, (user_id, role, intro) in zip(columns, people):
         with column:
             return_column(user_id, role, intro, user_id)
     with st.expander("How the model weighs a return"):
@@ -654,7 +784,13 @@ def show_approval_result() -> None:
 
 
 def radar_tab() -> None:
-    st.markdown("### Ticket radar")
+    heading(
+        "Ticket radar",
+        "Ticket radar",
+        "An AI model reads customer-support tickets and scores how likely a top customer is to leave (the churn "
+        "score). For risky ones it recommends an action and explains why. **Nothing runs until a person presses "
+        "Approve.**",
+    )
     st.markdown(
         '<p class="osx-lede">The radar reads support tickets from top customers and shows what it found, what it '
         "recommends and why. The model recommends; a person approves before anything runs.</p>",
@@ -681,20 +817,53 @@ def radar_tab() -> None:
     metrics[2].metric("Critical urgency", fmt(critical))
     metrics[3].metric(f"Alerts in the last {response.get('since_hours', 24)} h", fmt(response.get("count_in_window")))
 
-    approver = st.text_input("Approving as", value="supervisor", key="approver").strip() or "supervisor"
+    eye(
+        "The four numbers",
+        "- **Waiting for approval**: recommendations nobody has approved yet.\n"
+        "- **Executed**: actions already carried out.\n- **Critical urgency**: tickets the model rates most urgent.\n"
+        "- **Alerts in the last N hours**: everything the radar raised recently.",
+    )
+    approver_col, filter_col = st.columns(2, gap="large")
+    approver = approver_col.text_input("Approving as", value="supervisor", key="approver").strip() or "supervisor"
+    show_filter = filter_col.pills(
+        "Show",
+        ["All", "Waiting", "Executed", "Critical"],
+        default="All",
+        key="radar_filter",
+        help="Narrow the list of tickets below.",
+    )
     show_approval_result()
 
     def triage(alert: Dict[str, Any]) -> Tuple[bool, int, float]:
         rank = URGENCY.get(str(alert.get("urgency")), ("", "", -1))[2]
         return (alert.get("status") == "ACTION_EXECUTED", -rank, -float(alert.get("churn_score") or 0))
 
-    for alert in sorted(alerts, key=triage):
+    def visible(alert: Dict[str, Any]) -> bool:
+        if show_filter == "Waiting":
+            return alert.get("status") == "PENDING_REVIEW"
+        if show_filter == "Executed":
+            return alert.get("status") == "ACTION_EXECUTED"
+        if show_filter == "Critical":
+            return alert.get("urgency") == "CRITICAL"
+        return True
+
+    shown = [a for a in alerts if visible(a)]
+    if not shown:
+        st.info("No tickets match this filter.")
+    for alert in sorted(shown, key=triage):
         ticket_id = str(alert.get("ticket_id"))
         st.markdown(ticket_card(alert), unsafe_allow_html=True)
-        if st.button("Approve & Execute Action", key=f"approve_{ticket_id}"):
+        button_col, tip_col = st.columns([8, 1], vertical_alignment="center")
+        if button_col.button("Approve & Execute Action", key=f"approve_{ticket_id}"):
             result = approve_churn_action(ticket_id, approver)
             st.session_state["approval_flash"] = {"ticket": ticket_id, "result": result, "user": approver}
             st.rerun()
+        with tip_col:
+            eye(
+                "Approve & Execute Action",
+                "Carries out the AI's recommended action for this ticket and records who approved it. It is safe "
+                "to press twice: the system remembers the first approval and does nothing the second time.",
+            )
         if alert.get("status") == "ACTION_EXECUTED":
             st.markdown(
                 '<div class="osx-gov">Already executed. Pressing the button again is safe: nothing runs twice.</div>',

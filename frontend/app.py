@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import pandas as pd
 import streamlit as st
 
 # ``streamlit run frontend/app.py`` puts only ``frontend`` on sys.path.
@@ -22,13 +23,16 @@ if str(_REPO_ROOT) not in sys.path:
 
 from frontend.services.live_bridge import (  # noqa: E402
     approve_churn_action,
+    clear_all_caches,
+    error_message,
+    execute_checkout,
     get_churn_alerts,
     get_identity_investigation,
     get_inventory,
     get_return_risk,
-    get_system_health,
     trigger_surge,
 )
+from frontend.services.status_probe import get_system_health  # noqa: E402
 
 st.set_page_config(
     page_title="OmniSync XAI Control",

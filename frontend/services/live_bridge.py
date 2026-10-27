@@ -64,6 +64,8 @@ __all__ = [
     "set_backend_url",
     "trigger_surge",
 ]
+
+
 # --------------------------------------------------------------------------------------------------------------
 # Errors
 # --------------------------------------------------------------------------------------------------------------
@@ -74,6 +76,7 @@ def _make_error(kind: str, message: str, status_code: Optional[int] = None, deta
 def is_error(result: Any) -> bool:
     """True when a bridge result carries an error marker."""
     return isinstance(result, Mapping) and ERROR_KEY in result
+
 
 def error_message(result: Any, default: str = "") -> str:
     """Return a readable error message from a failed result."""
@@ -210,6 +213,8 @@ def _invalidate(*cached: Any) -> None:
             function.clear()
         except Exception as exc:  # a cache problem must never fail an action that already succeeded
             logger.debug("Could not clear cache for %s: %s", getattr(function, "__name__", function), exc)
+
+
 def clear_all_caches() -> None:
     """Clear all cached backend reads."""
     _invalidate(
@@ -232,6 +237,7 @@ def set_backend_url(url: str) -> None:
 
     API_BASE_URL = url.rstrip("/")
     clear_all_caches()
+
 
 # --------------------------------------------------------------------------------------------------------------
 # Empty structures (what the UI renders when the backend cannot answer)
@@ -271,6 +277,7 @@ def _empty_investigation() -> Dict[str, Any]:
         "counter_evidence": [],
         "decision_status": "UNAVAILABLE",
     }
+
 
 def _empty_return_risk(user_id: str) -> Dict[str, Any]:
     # risk_level and policy are None, not level 1: showing "free returns" when we simply do not know would mislead.

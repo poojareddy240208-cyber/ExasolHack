@@ -145,3 +145,111 @@ a { color: var(--seafoam); }
 .osx-action-value { font-weight: 700; font-size: 1.05rem; margin-bottom: 0.7rem; }
 .osx-gov { color: var(--muted); font-size: 0.82rem; margin: 0.2rem 0 0.4rem; }
 @media (max-width: 760px) { .osx-facts { grid-template-columns: repeat(2, 1fr); } }
+
+/* Eye buttons: quiet until hovered, so the page stays calm. */
+[data-testid="stPopover"] button {
+  min-height: 1.9rem;
+  padding: 0 0.5rem;
+  border-radius: 999px;
+  opacity: 0.65;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+[data-testid="stPopover"] button:hover { opacity: 1; transform: scale(1.08); }
+[data-testid="stPopover"] button svg { display: none; }
+
+/* Cards and rows respond to the pointer. */
+.osx-ticket, .osx-xai, .osx-evi { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+.osx-ticket:hover, .osx-xai:hover, .osx-evi:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25); }
+.osx-table tbody tr { transition: background 0.15s ease; }
+.osx-table tbody tr:hover { background: rgba(45, 139, 139, 0.12); }
+@media (prefers-reduced-motion: reduce) {
+  [data-testid="stPopover"] button, .osx-ticket, .osx-xai, .osx-evi, .osx-table tbody tr { transition: none; }
+  [data-testid="stPopover"] button:hover, .osx-ticket:hover, .osx-xai:hover, .osx-evi:hover { transform: none; }
+}
+
+/* ==============================================================================================================
+   Command-center skin: green glow, grid backdrop, pill navigation, ticker strip, hero and KPI cards.
+   ============================================================================================================== */
+:root {
+  --mint: #3ee6b0;
+  --mint-deep: #1fb98a;
+  --bg-0: #07110f;
+  --bg-1: #0b1f1b;
+  --card: rgba(255, 255, 255, 0.045);
+  --card-line: rgba(120, 255, 210, 0.14);
+}
+.stApp {
+  background:
+    radial-gradient(1100px 520px at 78% 8%, rgba(31, 185, 138, 0.28), transparent 62%),
+    radial-gradient(900px 480px at 8% 22%, rgba(45, 139, 139, 0.2), transparent 60%),
+    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 70%);
+  background-attachment: fixed;
+}
+.stApp::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background-image: linear-gradient(rgba(120, 255, 210, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120, 255, 210, 0.05) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(180deg, #000 0%, transparent 75%);
+}
+[data-testid="stSidebar"] { background: rgba(7, 17, 15, 0.82); backdrop-filter: blur(8px); }
+.block-container { position: relative; z-index: 1; max-width: 1320px; }
+
+/* Ticker strip */
+.osx-ticker { overflow: hidden; border-top: 1px solid var(--card-line); border-bottom: 1px solid var(--card-line); background: rgba(0, 0, 0, 0.28); margin: -0.4rem 0 1.6rem; }
+.osx-ticker-track { display: inline-flex; gap: 3rem; padding: 0.7rem 0; white-space: nowrap; animation: osx-scroll 38s linear infinite; }
+.osx-ticker:hover .osx-ticker-track { animation-play-state: paused; }
+.osx-tick { font-weight: 700; }
+.osx-tick b { color: var(--mint); margin-left: 0.35rem; }
+.osx-tick.warn b { color: var(--sand); }
+.osx-tick.bad b { color: var(--burnt); }
+@keyframes osx-scroll { to { transform: translateX(-50%); } }
+
+/* Hero */
+.osx-eyebrow { color: var(--mint); font-weight: 700; font-size: 0.82rem; letter-spacing: 0.14em; margin: 0.4rem 0 0.9rem; }
+.osx-hero-title { font-size: clamp(2.2rem, 5vw, 3.9rem); line-height: 1.08; font-weight: 800; margin: 0 0 1.1rem; max-width: 17ch; }
+.osx-hero-title em { font-style: normal; color: var(--mint); }
+.osx-hero-sub { color: var(--muted); font-size: 1.15rem; line-height: 1.65; max-width: 62ch; margin: 0 0 1.6rem; }
+.osx-cta-row { display: flex; gap: 0.8rem; flex-wrap: wrap; margin-bottom: 1.4rem; }
+.osx-cta { display: inline-block; padding: 0.8rem 1.4rem; border-radius: 12px; font-weight: 700; text-decoration: none !important; transition: transform 0.15s ease, box-shadow 0.15s ease; }
+.osx-cta.primary { background: linear-gradient(135deg, var(--mint), var(--mint-deep)); color: #04130e !important; box-shadow: 0 6px 24px rgba(62, 230, 176, 0.28); }
+.osx-cta.ghost { background: rgba(255, 255, 255, 0.07); color: var(--cream) !important; border: 1px solid var(--card-line); }
+.osx-cta:hover { transform: translateY(-2px); }
+.osx-banner { border: 1px solid var(--card-line); background: rgba(62, 230, 176, 0.06); border-radius: 12px; padding: 0.85rem 1.1rem; margin-bottom: 1.4rem; }
+.osx-banner.warn { background: rgba(233, 196, 106, 0.08); border-color: rgba(233, 196, 106, 0.3); }
+
+/* How it works */
+.osx-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0.9rem; margin: 0.4rem 0 1.8rem; }
+.osx-step { background: var(--card); border: 1px solid var(--card-line); border-radius: 14px; padding: 1rem 1.1rem; transition: transform 0.15s ease, border-color 0.15s ease; }
+.osx-step:hover { transform: translateY(-3px); border-color: var(--mint); }
+.osx-step-n { color: var(--mint); font-weight: 800; font-size: 0.85rem; }
+.osx-step-t { font-weight: 700; margin: 0.25rem 0; }
+.osx-step-d { color: var(--muted); font-size: 0.9rem; line-height: 1.5; }
+
+/* Pill navigation (the tab bar) */
+.stTabs [data-baseweb="tab-list"] { gap: 0.3rem; border: 1px solid var(--card-line); background: rgba(0, 0, 0, 0.3); border-radius: 999px; padding: 0.3rem; width: fit-content; max-width: 100%; overflow-x: auto; }
+.stTabs [data-baseweb="tab"] { padding: 0.5rem 1.1rem; border-radius: 999px; }
+.stTabs [aria-selected="true"] { background: rgba(62, 230, 176, 0.16); color: var(--mint); }
+.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { display: none; }
+
+/* KPI cards */
+[data-testid="stMetric"] { background: var(--card); border: 1px solid var(--card-line); border-left: 1px solid var(--card-line); border-radius: 14px; padding: 1rem 1.2rem; transition: transform 0.15s ease, border-color 0.15s ease; }
+[data-testid="stMetric"]:hover { transform: translateY(-2px); border-color: var(--mint); }
+[data-testid="stMetricValue"] { font-size: 2.3rem; }
+
+/* Primary buttons follow the mint accent */
+.stButton > button, .stFormSubmitButton > button { background: linear-gradient(135deg, var(--mint), var(--mint-deep)); color: #04130e; border: 0; border-radius: 12px; }
+.stButton > button:hover, .stFormSubmitButton > button:hover { background: linear-gradient(135deg, #6af2c9, var(--mint)); color: #04130e; border: 0; }
+.st-key-surge button { background: transparent; color: var(--burnt); border: 1px solid var(--burnt); }
+.st-key-surge button:hover { background: rgba(231, 111, 81, 0.16); color: var(--cream); border: 1px solid var(--burnt); }
+.osx-table-wrap, .osx-ticket, .osx-xai, .osx-evi { border-radius: 14px; }
+@media (prefers-reduced-motion: reduce) {
+  .osx-ticker-track { animation: none; }
+  .osx-cta, .osx-step, [data-testid="stMetric"] { transition: none; }
+}
+
+/* Streamlit 1.66 tabs use react-aria roles instead of BaseWeb attributes. */
+[role="tablist"] { gap: 0.3rem; border: 1px solid var(--card-line); background: rgba(0, 0, 0, 0.3); border-radius: 999px; padding: 0.3rem; width: fit-content; max-width: 100%; overflow-x: auto; }
+[role="tab"] { padding: 0.5rem 1.1rem; border-radius: 999px; color: var(--muted); font-weight: 700; border: 0; }
+[role="tab"][aria-selected="true"] { background: rgba(62, 230, 176, 0.16); color: var(--mint); }
+[role="tablist"] > :not([role="tab"]) { display: none; }

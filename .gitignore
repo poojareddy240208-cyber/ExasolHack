@@ -99,6 +99,7 @@ docker-compose.override.yml
 .DS_Store
 Thumbs.db
 Desktop.ini
+opencode.jsonc
 
 # Exasol / BucketFS local staging (if any)
 bucketfs_staging/

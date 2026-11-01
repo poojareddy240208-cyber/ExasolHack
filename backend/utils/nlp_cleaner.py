@@ -12,7 +12,9 @@ from typing import Any, Optional
 
 # Regular expressions for text sanitation
 # Block-level HTML elements replaced with space to preserve sentence boundaries
-BLOCK_TAGS_PATTERN = re.compile(r"(?i)<(?:br|p|div|li|tr|h[1-6]|table|blockquote)\b[^>]*>")
+BLOCK_TAGS_PATTERN = re.compile(
+    r"(?i)<(?:br|p|div|li|tr|h[1-6]|table|blockquote)\b[^>]*>"
+)
 BLOCK_TAGS_END_PATTERN = re.compile(r"(?i)</(?:p|div|li|tr|h[1-6]|table|blockquote)>")
 
 # Remaining HTML tags (e.g. <b>, <span>, <a>) stripped cleanly without introducing unwanted intra-word spaces

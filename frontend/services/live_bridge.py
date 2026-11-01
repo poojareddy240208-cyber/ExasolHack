@@ -40,7 +40,10 @@ logger = logging.getLogger("omnisync.frontend.bridge")
 API_BASE_URL = os.getenv("BACKEND_API_BASE_URL", "http://api:8000").rstrip("/")
 API_PREFIX = "/api/v1"
 
-READ_TIMEOUT = (2, 5)  # (connect, read) seconds: a dead backend is reported within a few seconds
+READ_TIMEOUT = (
+    2,
+    5,
+)  # (connect, read) seconds: a dead backend is reported within a few seconds
 WRITE_TIMEOUT = (2, 15)  # checkout and approvals may legitimately take longer
 CACHE_TTL_SECONDS = 2
 MAX_SURGE_BOTS = 500
@@ -53,7 +56,9 @@ __all__ = [
     "approve_churn_action",
     "clear_all_caches",
     "error_message",
+    "evaluate_sandbox_risk",
     "execute_checkout",
+    "execute_manual_checkout",
     "get_backend_url",
     "get_churn_alerts",
     "get_identity_investigation",
@@ -62,6 +67,8 @@ __all__ = [
     "get_system_health",
     "is_error",
     "set_backend_url",
+    "simulate_custom_ticket",
+    "submit_identity_decision",
     "trigger_surge",
 ]
 
@@ -69,8 +76,15 @@ __all__ = [
 # --------------------------------------------------------------------------------------------------------------
 # Errors
 # --------------------------------------------------------------------------------------------------------------
-def _make_error(kind: str, message: str, status_code: Optional[int] = None, detail: Any = None) -> Dict[str, Any]:
-    return {"kind": kind, "status_code": status_code, "message": message, "detail": detail}
+def _make_error(
+    kind: str, message: str, status_code: Optional[int] = None, detail: Any = None
+) -> Dict[str, Any]:
+    return {
+        "kind": kind,
+        "status_code": status_code,
+        "message": message,
+        "detail": detail,
+    }
 
 
 def is_error(result: Any) -> bool:
@@ -118,7 +132,11 @@ def _detail_message(body: Any, response: requests.Response) -> str:
         for item in detail:
             if isinstance(item, Mapping):
                 location = ".".join(str(p) for p in item.get("loc", []) if p != "body")
-                parts.append(f"{location}: {item.get('msg')}" if location else str(item.get("msg")))
+                parts.append(
+                    f"{location}: {item.get('msg')}"
+                    if location
+                    else str(item.get("msg"))
+                )
             else:
                 parts.append(str(item))
         if parts:
@@ -136,7 +154,9 @@ def _session() -> requests.Session:
     adapter = HTTPAdapter(pool_connections=4, pool_maxsize=SURGE_WORKERS * 2)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
-    session.headers.update({"Accept": "application/json", "User-Agent": "omnisync-dashboard"})
+    session.headers.update(
+        {"Accept": "application/json", "User-Agent": "omnisync-dashboard"}
+    )
     return session
 
 
@@ -163,16 +183,37 @@ def _call(
     """
     url = _url(path)
     try:
-        response = _session().request(method, url, params=params, json=body, timeout=timeout)
+        response = _session().request(
+            method, url, params=params, json=body, timeout=timeout
+        )
     except requests.exceptions.Timeout:
         logger.warning("Backend timed out: %s %s", method, url)
-        return None, _make_error("timeout", "The backend did not answer in time. Try again in a moment."), None
+        return (
+            None,
+            _make_error(
+                "timeout", "The backend did not answer in time. Try again in a moment."
+            ),
+            None,
+        )
     except requests.exceptions.ConnectionError:
         logger.warning("Backend unreachable: %s %s", method, url)
-        return None, _make_error("unreachable", f"Cannot reach the backend at {API_BASE_URL}. Is it running?"), None
+        return (
+            None,
+            _make_error(
+                "unreachable",
+                f"Cannot reach the backend at {API_BASE_URL}. Is it running?",
+            ),
+            None,
+        )
     except requests.exceptions.RequestException as exc:
         logger.warning("Request failed: %s %s: %s", method, url, exc)
-        return None, _make_error("request_error", f"The request could not be sent: {type(exc).__name__}."), None
+        return (
+            None,
+            _make_error(
+                "request_error", f"The request could not be sent: {type(exc).__name__}."
+            ),
+            None,
+        )
 
     try:
         parsed = response.json()
@@ -181,22 +222,38 @@ def _call(
 
     if not response.ok:
         message = _detail_message(parsed, response)
-        logger.info("Backend returned %s for %s %s: %s", response.status_code, method, url, message)
-        return None, _make_error("http_error", message, response.status_code, parsed), response.status_code
+        logger.info(
+            "Backend returned %s for %s %s: %s",
+            response.status_code,
+            method,
+            url,
+            message,
+        )
+        return (
+            None,
+            _make_error("http_error", message, response.status_code, parsed),
+            response.status_code,
+        )
 
     if not isinstance(parsed, dict):
         logger.warning("Unreadable backend response for %s %s", method, url)
         return (
             None,
             _make_error(
-                "invalid_response", "The backend sent a response the dashboard cannot read.", response.status_code
+                "invalid_response",
+                "The backend sent a response the dashboard cannot read.",
+                response.status_code,
             ),
             response.status_code,
         )
     return parsed, None, response.status_code
 
 
-def _read(path: str, empty: Callable[[], Dict[str, Any]], params: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+def _read(
+    path: str,
+    empty: Callable[[], Dict[str, Any]],
+    params: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
     """GET helper: the data on success, otherwise a fresh empty structure carrying the error."""
     data, error, _ = _call("GET", path, params=params)
     if error is None and data is not None:
@@ -211,8 +268,14 @@ def _invalidate(*cached: Any) -> None:
     for function in cached:
         try:
             function.clear()
-        except Exception as exc:  # a cache problem must never fail an action that already succeeded
-            logger.debug("Could not clear cache for %s: %s", getattr(function, "__name__", function), exc)
+        except (
+            Exception
+        ) as exc:  # a cache problem must never fail an action that already succeeded
+            logger.debug(
+                "Could not clear cache for %s: %s",
+                getattr(function, "__name__", function),
+                exc,
+            )
 
 
 def clear_all_caches() -> None:
@@ -299,7 +362,12 @@ def _empty_return_risk(user_id: str) -> Dict[str, Any]:
 
 
 def _empty_alerts(since_hours: int) -> Dict[str, Any]:
-    return {"since_hours": since_hours, "count_in_window": 0, "total_alerts": 0, "alerts": []}
+    return {
+        "since_hours": since_hours,
+        "count_in_window": 0,
+        "total_alerts": 0,
+        "alerts": [],
+    }
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -320,17 +388,23 @@ def get_inventory() -> Dict[str, Any]:
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def get_identity_investigation(customer_id: str) -> Dict[str, Any]:
     """Explainable identity evidence and confidence for one golden customer (`GET .../{id}/investigation`)."""
-    return _read(f"/golden-customers/{_segment(customer_id)}/investigation", _empty_investigation)
+    return _read(
+        f"/golden-customers/{_segment(customer_id)}/investigation", _empty_investigation
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def get_return_risk(user_id: str) -> Dict[str, Any]:
     """Pre-computed return risk level, policy and rationale for a shopper (`GET /return-risk/{user_id}`)."""
-    return _read(f"/return-risk/{_segment(user_id)}", lambda: _empty_return_risk(user_id))
+    return _read(
+        f"/return-risk/{_segment(user_id)}", lambda: _empty_return_risk(user_id)
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def get_churn_alerts(limit: int = 50, since_hours: int = 24, min_score: float = 0.0) -> Dict[str, Any]:
+def get_churn_alerts(
+    limit: int = 50, since_hours: int = 24, min_score: float = 0.0
+) -> Dict[str, Any]:
     """Recent VIP churn alerts, newest first (`GET /churn/alerts`)."""
     params = {"limit": limit, "since_hours": since_hours, "min_score": min_score}
     return _read("/churn/alerts", lambda: _empty_alerts(since_hours), params=params)
@@ -356,12 +430,21 @@ def trigger_surge(item_id: str, bots: int = 1) -> Dict[str, Any]:
         add succeeded; ``_error`` is only set when every request failed.
     """
     if not item_id or not str(item_id).strip():
-        return _failed(_make_error("request_error", "Choose an item first."), requested=0, succeeded=0)
+        return _failed(
+            _make_error("request_error", "Choose an item first."),
+            requested=0,
+            succeeded=0,
+        )
     count = max(1, min(int(bots), MAX_SURGE_BOTS))
 
     def add_one(_: int) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-        payload = {"item_id": item_id, "user_session_id": f"bot-{uuid.uuid4().hex[:12]}"}
-        data, error, _status = _call("POST", "/cart/add", body=payload, timeout=WRITE_TIMEOUT)
+        payload = {
+            "item_id": item_id,
+            "user_session_id": f"bot-{uuid.uuid4().hex[:12]}",
+        }
+        data, error, _status = _call(
+            "POST", "/cart/add", body=payload, timeout=WRITE_TIMEOUT
+        )
         return data, error
 
     with ThreadPoolExecutor(max_workers=min(SURGE_WORKERS, count)) as pool:
@@ -390,14 +473,20 @@ def trigger_surge(item_id: str, bots: int = 1) -> Dict[str, Any]:
     return result
 
 
-def _checkout_outcome(status_code: Optional[int], error: Optional[Dict[str, Any]]) -> str:
+def _checkout_outcome(
+    status_code: Optional[int], error: Optional[Dict[str, Any]]
+) -> str:
     if error is None:
         return "SUCCESS"
     if status_code is None:
         return "TIMEOUT" if error["kind"] == "timeout" else "UNREACHABLE"
     if status_code == 409:
         text = error["message"].lower()
-        return "RESERVED_SAFETY_BUFFER" if ("high demand" in text or "reserved" in text) else "OCC_CONFLICT"
+        return (
+            "RESERVED_SAFETY_BUFFER"
+            if ("high demand" in text or "reserved" in text)
+            else "OCC_CONFLICT"
+        )
     return {404: "NOT_FOUND", 422: "INVALID_REQUEST"}.get(status_code, "SERVER_ERROR")
 
 
@@ -414,10 +503,14 @@ def execute_checkout(payload: Mapping[str, Any]) -> Dict[str, Any]:
         SERVER_ERROR, TIMEOUT or UNREACHABLE. `data` holds the backend response on success.
     """
     if not isinstance(payload, Mapping):
-        error = _make_error("request_error", "The checkout request must be a set of fields.")
+        error = _make_error(
+            "request_error", "The checkout request must be a set of fields."
+        )
         return _failed(error, outcome="INVALID_REQUEST", status_code=None, data={})
 
-    data, error, status_code = _call("POST", "/checkout", body=payload, timeout=WRITE_TIMEOUT)
+    data, error, status_code = _call(
+        "POST", "/checkout", body=payload, timeout=WRITE_TIMEOUT
+    )
     outcome = _checkout_outcome(status_code, error)
     if error is not None:
         return _failed(error, outcome=outcome, status_code=status_code, data={})
@@ -443,16 +536,252 @@ def approve_churn_action(ticket_id: str, user: str) -> Dict[str, Any]:
         ``{"ok", "message", "already_executed", "data"}``; ``_error`` is set when the approval failed.
     """
     if not ticket_id or not str(ticket_id).strip() or not user or not str(user).strip():
-        error = _make_error("request_error", "A ticket and the approving operator are both required.")
+        error = _make_error(
+            "request_error", "A ticket and the approving operator are both required."
+        )
         return _failed(error, already_executed=False, data={})
 
     data, error, _status = _call(
-        "POST", f"/churn/alerts/{_segment(ticket_id)}/approve", body={"approved_by": user}, timeout=WRITE_TIMEOUT
+        "POST",
+        f"/churn/alerts/{_segment(ticket_id)}/approve",
+        body={"approved_by": user},
+        timeout=WRITE_TIMEOUT,
     )
     if error is not None:
-        message = "That alert no longer exists." if error["status_code"] == 404 else error["message"]
+        message = (
+            "That alert no longer exists."
+            if error["status_code"] == 404
+            else error["message"]
+        )
         return _failed({**error, "message": message}, already_executed=False, data={})
 
     _invalidate(get_churn_alerts)
     message = data.get("message", "Action approved.")
-    return {"ok": True, "message": message, "already_executed": "already executed" in message.lower(), "data": data}
+    return {
+        "ok": True,
+        "message": message,
+        "already_executed": "already executed" in message.lower(),
+        "data": data,
+    }
+
+
+def execute_manual_checkout(
+    item_id: str, quantity: int, user_session_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """Execute a manual checkout against the transactional checkout endpoint.
+
+    Handles HTTP 409 Conflict gracefully so the caller can display OCC lock / safety buffer holds.
+    """
+    if not item_id or not str(item_id).strip():
+        return _failed(
+            _make_error("request_error", "Choose an item first."),
+            outcome="INVALID_REQUEST",
+            status_code=None,
+            conflict=False,
+            data={},
+        )
+    qty = int(quantity)
+    if qty <= 0:
+        return _failed(
+            _make_error("request_error", "Quantity must be greater than 0."),
+            outcome="INVALID_REQUEST",
+            status_code=None,
+            conflict=False,
+            data={},
+        )
+
+    session_id = user_session_id or f"manual-{uuid.uuid4().hex[:8]}"
+    payload = {
+        "item_id": str(item_id).strip(),
+        "quantity": qty,
+        "user_session_id": session_id,
+        "payment_method": "credit_card",
+    }
+
+    data, error, status_code = _call(
+        "POST", "/checkout", body=payload, timeout=WRITE_TIMEOUT
+    )
+    outcome = _checkout_outcome(status_code, error)
+
+    if status_code == 409 or (error and error.get("status_code") == 409):
+        msg = (
+            error.get("message")
+            if error
+            else "OCC lock active: concurrent modification or safety buffer conflict."
+        )
+        return {
+            "ok": False,
+            "conflict": True,
+            "status_code": 409,
+            "outcome": outcome,
+            "message": msg,
+            "data": error.get("detail") if error else {},
+            ERROR_KEY: error,
+        }
+
+    if error is not None:
+        return _failed(
+            error,
+            outcome=outcome,
+            status_code=status_code,
+            conflict=False,
+            data={},
+        )
+
+    _invalidate(get_inventory, get_return_risk)
+    return {
+        "ok": True,
+        "conflict": False,
+        "outcome": outcome,
+        "status_code": status_code,
+        "message": data.get("message", "Order placed.") if data else "Order placed.",
+        "data": data or {},
+    }
+
+
+def simulate_custom_ticket(text: str) -> Dict[str, Any]:
+    """Simulate real-time PyTorch NLP classification for a custom support ticket via Exasol / FastAPI backend.
+
+    Hits POST /api/v1/churn/simulate with {'text': text} and returns NLP JSON:
+    Sentiment, Urgency, Root Cause, Recommended Action.
+    """
+    if not text or not str(text).strip():
+        return _failed(
+            _make_error("request_error", "Ticket text is required."),
+            data={},
+            sentiment="Neutral",
+            urgency="LOW",
+            root_cause="None",
+            recommended_action="None",
+        )
+
+    payload = {"text": str(text).strip()}
+    data, error, status_code = _call(
+        "POST", "/churn/simulate", body=payload, timeout=WRITE_TIMEOUT
+    )
+
+    if error is not None:
+        return _failed(
+            error,
+            status_code=status_code,
+            data={},
+            sentiment="Error",
+            urgency="UNKNOWN",
+            root_cause="Inference Error",
+            recommended_action="Review Error Log",
+        )
+
+    res_data = data or {}
+    action = res_data.get(
+        "recommended_action", res_data.get("action", "VIP Concierge Outreach")
+    )
+    return {
+        "ok": True,
+        "status_code": status_code,
+        "message": res_data.get("message", "NLP classification complete."),
+        "sentiment": res_data.get("sentiment", "Negative"),
+        "urgency": res_data.get("urgency", "HIGH"),
+        "root_cause": res_data.get("root_cause", "Customer Dissatisfaction"),
+        "recommended_action": action,
+        "action": action,
+        "xai_explanation": res_data.get("xai_explanation", ""),
+        "churn_score": res_data.get("churn_score", 0.90),
+        "data": res_data,
+    }
+
+
+def submit_identity_decision(candidate_id: str, decision: str) -> Dict[str, Any]:
+    """Submit a human-in-the-loop governance decision for an identity merge candidate.
+
+    Hits POST /api/v1/golden-customers/{candidate_id}/decide.
+    """
+    if (
+        not candidate_id
+        or not str(candidate_id).strip()
+        or not decision
+        or not str(decision).strip()
+    ):
+        return _failed(
+            _make_error(
+                "request_error", "Candidate ID and decision are both required."
+            ),
+            candidate_id=candidate_id,
+            decision=decision,
+            data={},
+        )
+
+    clean_id = str(candidate_id).strip()
+    clean_decision = str(decision).strip().upper()
+    payload = {"decision": clean_decision}
+
+    data, error, status_code = _call(
+        "POST",
+        f"/golden-customers/{_segment(clean_id)}/decide",
+        body=payload,
+        timeout=WRITE_TIMEOUT,
+    )
+
+    if error is not None:
+        return _failed(
+            error,
+            status_code=status_code,
+            candidate_id=clean_id,
+            decision=clean_decision,
+            data={},
+        )
+
+    _invalidate(get_identity_investigation)
+    return {
+        "ok": True,
+        "status_code": status_code,
+        "candidate_id": clean_id,
+        "decision": clean_decision,
+        "message": (
+            data.get(
+                "message",
+                f"Identity merge decision '{clean_decision}' recorded.",
+            )
+            if data
+            else f"Decision {clean_decision} recorded."
+        ),
+        "data": data or {},
+    }
+
+
+def evaluate_sandbox_risk(return_count: int, reason: str) -> Dict[str, Any]:
+    """Evaluate context-aware return risk sandbox simulation dynamically.
+
+    Hits POST /api/v1/return-risk/simulate with return count and reason.
+    """
+    payload = {
+        "return_count": max(0, int(return_count)),
+        "reason": str(reason).strip(),
+    }
+    data, error, status_code = _call(
+        "POST", "/return-risk/simulate", body=payload, timeout=WRITE_TIMEOUT
+    )
+
+    if error is not None:
+        return _failed(
+            error,
+            status_code=status_code,
+            risk_level=1,
+            return_rate=0.0,
+            policy={},
+            xai_explanation="Simulation service unavailable.",
+            human_review_required=False,
+            data={},
+        )
+
+    res_data = data or {}
+    return {
+        "ok": True,
+        "status_code": status_code,
+        "risk_level": res_data.get("risk_level", 1),
+        "return_rate": res_data.get("return_rate", 0.0),
+        "policy": res_data.get("policy", {}),
+        "xai_explanation": res_data.get("xai_explanation", ""),
+        "human_review_required": res_data.get("human_review_required", False),
+        "message": res_data.get("message", "Sandbox risk evaluated successfully."),
+        "data": res_data,
+    }

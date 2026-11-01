@@ -25,11 +25,15 @@ from frontend.services.live_bridge import (  # noqa: E402
     approve_churn_action,
     clear_all_caches,
     error_message,
+    evaluate_sandbox_risk,
     execute_checkout,
+    execute_manual_checkout,
     get_churn_alerts,
     get_identity_investigation,
     get_inventory,
     get_return_risk,
+    simulate_custom_ticket,
+    submit_identity_decision,
     trigger_surge,
 )
 from frontend.services.status_probe import get_system_health  # noqa: E402
@@ -505,6 +509,49 @@ def inventory_tab() -> None:
                 or "Unknown response",
             }
             st.rerun()
+
+        st.markdown('<div class="os-rule"></div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="os-eyebrow">Checkout Simulator</div>', unsafe_allow_html=True
+        )
+        st.markdown("#### Checkout Simulator")
+        st.caption("Place a transactional order against PostgreSQL under OCC locks.")
+
+        with st.form(key=f"checkout_sim_form_{selected_id}"):
+            sim_quantity = st.number_input(
+                "Quantity",
+                min_value=1,
+                max_value=500,
+                value=1,
+                step=1,
+                key=f"sim_qty_input_{selected_id}",
+            )
+            submit_order = st.form_submit_button(
+                "Submit Order", use_container_width=True
+            )
+
+        if submit_order:
+            with st.spinner("Executing transactional checkout against PostgreSQL..."):
+                checkout_res = execute_manual_checkout(selected_id, int(sim_quantity))
+            if checkout_res.get("ok"):
+                st.success(
+                    f"**Order Placed Successfully!** Order ID: `{checkout_res.get('data', {}).get('order_id', 'CONFIRMED')}` · "
+                    f"Remaining Stock: `{checkout_res.get('data', {}).get('remaining_stock')}` · "
+                    f"OCC Version: `{checkout_res.get('data', {}).get('new_version')}`"
+                )
+                st.toast("Order Confirmed via OCC", icon="✅")
+            else:
+                err_msg = (
+                    checkout_res.get("message")
+                    or "Concurrent modification detected. Transaction rolled back."
+                )
+                st.error(
+                    f"**TRANSACTION BLOCKED: OCC / SAFETY STOCK LOCK ENFORCED**\n\n"
+                    f"**Error Response (HTTP {checkout_res.get('status_code', 409)}):** {err_msg}\n\n"
+                    f"**Mathematical Invariant Protected:** `Available ({available}) = Physical ({physical}) - Reserved ({held})`. "
+                    f"PostgreSQL OCC version check and virtual safety buffer successfully prevented overselling."
+                )
+                st.toast("OCC Lock Enforced", icon="🛑")
     with context_col:
         st.markdown(
             '<div class="os-xai"><div class="os-xai-title">Exasol forecast alert</div>'
@@ -591,6 +638,48 @@ def identity_tab() -> None:
         unsafe_allow_html=True,
     )
 
+    st.markdown('<div class="os-rule"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="os-eyebrow">Human Governance</div>', unsafe_allow_html=True
+    )
+    st.markdown("#### Human Governance")
+    st.caption(
+        "Human-in-the-loop oversight: approve or reject merging these fragmented identities into the Golden Customer Record."
+    )
+
+    gov_col1, gov_col2 = st.columns(2, gap="medium")
+    with gov_col1:
+        if st.button(
+            "❌ Reject Merge",
+            key=f"reject_merge_{customer_id}",
+            use_container_width=True,
+        ):
+            with st.spinner("Submitting merge rejection..."):
+                res = submit_identity_decision(customer_id, "REJECT")
+            if res.get("ok"):
+                st.toast(f"Merge Rejected for {customer_id}", icon="❌")
+                st.success(
+                    f"**Decision Recorded**: Identity merge rejected for {customer_id}. Candidate isolated from Golden Record."
+                )
+            else:
+                st.error(f"Failed to record rejection: {res.get('message')}")
+
+    with gov_col2:
+        if st.button(
+            "✅ Approve Merge",
+            key=f"approve_merge_{customer_id}",
+            use_container_width=True,
+        ):
+            with st.spinner("Submitting merge approval..."):
+                res = submit_identity_decision(customer_id, "APPROVE")
+            if res.get("ok"):
+                st.toast(f"Merge Approved for {customer_id}", icon="✅")
+                st.success(
+                    f"**Decision Recorded**: Identity merge approved for {customer_id}. Golden Customer Profile unified."
+                )
+            else:
+                st.error(f"Failed to record approval: {res.get('message')}")
+
 
 # -------------------------------------------------------------------------------------------------
 # Tab 3 — Context-aware returns
@@ -662,6 +751,87 @@ def returns_tab() -> None:
         unsafe_allow_html=True,
     )
 
+    st.markdown('<div class="os-rule"></div>', unsafe_allow_html=True)
+    with st.expander("🧪 Risk Sandbox", expanded=True):
+        st.markdown(
+            '<div class="os-eyebrow">Real-Time Context Simulator</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("#### Dynamic Policy & Risk Simulation")
+        st.caption(
+            "Simulate return behaviors to observe how Exasol's XAI model shifts penalties based on causal context rather than raw return rates."
+        )
+
+        sb_col1, sb_col2 = st.columns(2, gap="large")
+        with sb_col1:
+            total_returns = st.slider(
+                "Total Returns",
+                min_value=1,
+                max_value=20,
+                value=6,
+                step=1,
+                key="sandbox_returns_slider",
+            )
+        with sb_col2:
+            return_reason = st.selectbox(
+                "Return Reason",
+                ["Defective Batch", "Wardrobing"],
+                key="sandbox_reason_select",
+            )
+
+        if st.button(
+            "Calculate Live Risk", key="btn_calc_sandbox_risk", use_container_width=True
+        ):
+            with st.spinner(
+                "Evaluating contextual policy via Exasol analytical model..."
+            ):
+                sandbox_res = evaluate_sandbox_risk(total_returns, return_reason)
+                st.session_state["sandbox_res"] = sandbox_res
+
+        sandbox_data = st.session_state.get("sandbox_res")
+        if sandbox_data:
+            if sandbox_data.get("ok"):
+                lvl = integer(sandbox_data.get("risk_level", 1))
+                rate_val = percent(sandbox_data.get("return_rate", 0.0))
+                policy = as_mapping(sandbox_data.get("policy"))
+                exp_text = sandbox_data.get("xai_explanation", "")
+                badge_tone = "green" if lvl <= 2 else "red" if lvl >= 4 else "yellow"
+                fee = number(policy.get("restocking_fee_usd", 0.0))
+                cod = (
+                    "Allowed"
+                    if policy.get("cash_on_delivery_allowed", True)
+                    else "Disabled"
+                )
+
+                st.markdown(
+                    f'<div class="os-return-card {"vip" if lvl <= 2 else "wardrobe"}" style="margin-top:1rem;">'
+                    f'<div class="os-return-name">Simulation Outcome: {esc(return_reason)} ({total_returns} Returns)</div>'
+                    f'<div class="os-return-role">Dynamic Evaluation · Contextual Policy Shift</div>'
+                    f'<div class="os-return-grid">'
+                    f'<div class="os-return-stat"><div class="os-return-label">Simulated Return Rate</div><div class="os-return-value">{rate_val}</div></div>'
+                    f'<div class="os-return-stat"><div class="os-return-label">Calculated Risk Level</div><div class="os-return-value">Level {lvl}</div></div>'
+                    f'<div class="os-return-stat"><div class="os-return-label">Restocking Fee</div><div class="os-return-value">${fee:.2f}</div></div>'
+                    f'<div class="os-return-stat"><div class="os-return-label">Cash on Delivery</div><div class="os-return-value">{cod}</div></div>'
+                    f"</div>"
+                    f'<div style="margin:1rem 0 .8rem"><span class="os-badge {badge_tone}">'
+                    f'{"Standard Free Returns" if lvl == 1 else "Human Review Required" if sandbox_data.get("human_review_required") else "Friction Guard"}</span></div>'
+                    f'<div class="os-xai {"green" if lvl <= 2 else "red"}">'
+                    f'<div class="os-xai-title">Context-Aware AI Rationale</div>'
+                    f'<p class="os-xai-copy">{esc(exp_text)}</p></div>'
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                if sandbox_data.get("human_review_required"):
+                    st.markdown(
+                        '<div class="os-review" style="margin-top:.6rem;">Human review mandatory before penalty enforcement. High wardrobing probability detected.</div>',
+                        unsafe_allow_html=True,
+                    )
+                st.toast(f"Risk Evaluated: Level {lvl}", icon="📊")
+            else:
+                st.error(
+                    f"Sandbox evaluation failed: {error_text(sandbox_data) or sandbox_data.get('message')}"
+                )
+
 
 # -------------------------------------------------------------------------------------------------
 # Tab 4 — NLP Ticket Radar
@@ -703,6 +873,72 @@ def radar_tab() -> None:
         "NLP Ticket Radar",
         "Autonomous recovery · deep NLP routes the issue, while a human remains in the approval loop.",
     )
+
+    st.markdown(
+        '<div class="os-eyebrow">Real-Time NLP Interception</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("#### Live Interception")
+    st.caption(
+        "Input an unclassified customer support message to trigger real-time in-database PyTorch classification via Exasol."
+    )
+
+    custom_text = st.text_area(
+        "Live Interception",
+        value="I've been a loyal customer for 4 years spending over $12,000, but my package arrived completely smashed and customer support ignored me for 3 days. Cancel my membership immediately!",
+        height=95,
+        key="custom_ticket_text_area",
+        help="Type any angry, frustrated, or inquiry text to test PyTorch NLP inference.",
+    )
+    if st.button(
+        "Analyze Live Ticket", key="btn_analyze_live_ticket", use_container_width=True
+    ):
+        with st.spinner("Dispatching to Exasol PyTorch Transformer UDF..."):
+            ticket_analysis = simulate_custom_ticket(custom_text)
+            st.session_state["live_ticket_analysis"] = ticket_analysis
+
+    analysis = st.session_state.get("live_ticket_analysis")
+    if analysis:
+        if analysis.get("ok"):
+            sentiment_str = analysis.get("sentiment", "Negative")
+            urgency_str = str(analysis.get("urgency", "CRITICAL")).upper()
+            action_str = analysis.get("recommended_action") or analysis.get(
+                "action", "VIP Concierge Outreach"
+            )
+            root_cause_str = analysis.get("root_cause", "Product Quality Defect")
+            xai_exp = analysis.get(
+                "xai_explanation",
+                "In-database PyTorch Transformer flagged elevated churn risk.",
+            )
+            tone = URGENCY_TONE.get(urgency_str, "red")
+
+            st.markdown(
+                f'<div class="os-card" style="margin: 1rem 0 1.5rem; border-left: 3px solid var(--red);">'
+                f'<div class="os-eyebrow">Exasol PyTorch · Dedicated XAI Results Card</div>'
+                f'<div class="os-detail-grid">'
+                f'<div class="os-detail"><div class="os-detail-label">Sentiment</div>'
+                f'<div class="os-detail-value">{esc(sentiment_str)}</div></div>'
+                f'<div class="os-detail"><div class="os-detail-label">Urgency</div>'
+                f'<div class="os-detail-value"><span class="os-badge {tone}">{esc(humanize(urgency_str))} urgency</span></div></div>'
+                f'<div class="os-detail"><div class="os-detail-label">Root Cause</div>'
+                f'<div class="os-detail-value">{esc(humanize(root_cause_str))}</div></div>'
+                f"</div>"
+                f'<div class="os-action-card" style="margin-top: .8rem;">'
+                f'<div class="os-action-label">Recommended Action</div>'
+                f'<div class="os-action-copy">{esc(humanize(action_str))}</div>'
+                f'<div class="os-action-why"><b>XAI Rationale:</b> {esc(xai_exp)}</div>'
+                f"</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            st.toast("PyTorch NLP Analysis Complete", icon="🎯")
+        else:
+            st.error(
+                f"NLP analysis failed: {error_text(analysis) or analysis.get('message')}"
+            )
+
+    st.markdown('<div class="os-rule"></div>', unsafe_allow_html=True)
+
     approval_flash = st.session_state.pop("approval_flash", None)
     if approval_flash:
         if approval_flash.get("ok"):

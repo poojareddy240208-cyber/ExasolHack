@@ -7,7 +7,11 @@ They protect the PRD thresholds and the architectural rule that Exasol stays pas
 import pytest
 
 from backend.services.exasol_client import load_sql_statements
-from backend.services.return_risk import RETURN_RISK_PARAMS, SQL_FILE, run_return_risk_scoring
+from backend.services.return_risk import (
+    RETURN_RISK_PARAMS,
+    SQL_FILE,
+    run_return_risk_scoring,
+)
 
 
 def test_sql_renders_with_all_placeholders_filled():

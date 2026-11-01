@@ -30,7 +30,11 @@ def connect_exasol(
         autocommit: pass False to run several statements as one transaction.
         connection_timeout: seconds to wait for the connection (pyexasol's default applies when omitted).
     """
-    options = {"connection_timeout": connection_timeout} if connection_timeout is not None else {}
+    options = (
+        {"connection_timeout": connection_timeout}
+        if connection_timeout is not None
+        else {}
+    )
     # The Exasol docker image ships a self-signed certificate, so certificate checks are
     # disabled for this local development connection only.
     return pyexasol.connect(

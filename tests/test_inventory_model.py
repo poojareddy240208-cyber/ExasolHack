@@ -52,7 +52,9 @@ def test_virtual_safety_buffer_formula():
     # Scenario: 50 active carts, 10 physical stock left
     cart_vel = 50.0
     physical_stock = 10
-    features = pd.DataFrame([{"cart_velocity_5m": cart_vel, "hour_of_day": 18.0, "day_of_week": 4.0}])
+    features = pd.DataFrame(
+        [{"cart_velocity_5m": cart_vel, "hour_of_day": 18.0, "day_of_week": 4.0}]
+    )
     pred_demand = max(0.0, float(round(booster.predict(features)[0])))
 
     buffer_val = max(0.0, pred_demand - physical_stock + cart_vel)
@@ -64,7 +66,12 @@ def test_synthetic_data_generation():
     """Verifies synthetic dataset generation schema and reasonable ranges."""
     df = generate_synthetic_cart_data(n_samples=500)
     assert len(df) == 500
-    assert set(df.columns) == {"cart_velocity_5m", "hour_of_day", "day_of_week", "demand_next_15m"}
+    assert set(df.columns) == {
+        "cart_velocity_5m",
+        "hour_of_day",
+        "day_of_week",
+        "demand_next_15m",
+    }
     assert (df["demand_next_15m"] >= 0).all()
     assert (df["hour_of_day"].between(0, 23)).all()
     assert (df["day_of_week"].between(0, 6)).all()

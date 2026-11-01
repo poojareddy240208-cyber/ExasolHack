@@ -82,7 +82,13 @@ EXPORTS: Dict[str, Dict[str, object]] = {
             "FROM GOLDEN_CUSTOMER_MEMBERS m JOIN IDENTITY_NODES n ON n.NODE_ID = m.NODE_ID"
         ),
         "stage": "golden_customer_members_stage",
-        "columns": ["golden_customer_id", "node_id", "node_type", "source_id", "confidence"],
+        "columns": [
+            "golden_customer_id",
+            "node_id",
+            "node_type",
+            "source_id",
+            "confidence",
+        ],
     },
 }
 
@@ -159,7 +165,9 @@ def build_export_statement(name: str) -> str:
     )
 
 
-def create_exasol_connection(host: Optional[str] = None, postgres_host_for_exasol: Optional[str] = None) -> None:
+def create_exasol_connection(
+    host: Optional[str] = None, postgres_host_for_exasol: Optional[str] = None
+) -> None:
     """
     One-time setup: create the Exasol CONNECTION object that points at PostgreSQL.
 
@@ -178,7 +186,9 @@ def create_exasol_connection(host: Optional[str] = None, postgres_host_for_exaso
         )
     finally:
         conn.close()
-    logger.info("[reverse-etl] Exasol connection %s created for %s", EXASOL_CONNECTION, url)
+    logger.info(
+        "[reverse-etl] Exasol connection %s created for %s", EXASOL_CONNECTION, url
+    )
 
 
 def sync_module3_to_postgres(
@@ -195,7 +205,9 @@ def sync_module3_to_postgres(
         with pg.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_ID,))
             if not cur.fetchone()[0]:
-                logger.warning("[reverse-etl] another sync is running, skipping this run")
+                logger.warning(
+                    "[reverse-etl] another sync is running, skipping this run"
+                )
                 return {"status": "SKIPPED"}
         try:
             return _run_sync(pg, exasol_host)
@@ -218,7 +230,9 @@ def _run_sync(pg, exasol_host: Optional[str]) -> Dict[str, object]:
     try:
         expected = {}
         for name, spec in EXPORTS.items():
-            expected[name] = int(exasol.execute(f"SELECT COUNT(*) FROM ({spec['source']})").fetchval())
+            expected[name] = int(
+                exasol.execute(f"SELECT COUNT(*) FROM ({spec['source']})").fetchval()
+            )
             exasol.execute(build_export_statement(name))
             logger.info("[reverse-etl] exported %d rows for %s", expected[name], name)
     finally:
@@ -247,7 +261,12 @@ def _run_sync(pg, exasol_host: Optional[str]) -> Dict[str, object]:
 
 
 TELEMETRY_TABLE = (SCHEMA, "LIVE_SKU_TELEMETRY")
-TELEMETRY_COLUMNS = ["ITEM_ID", "CURRENT_PHYSICAL_STOCK", "CART_VELOCITY_5M", "TELEMETRY_TIMESTAMP"]
+TELEMETRY_COLUMNS = [
+    "ITEM_ID",
+    "CURRENT_PHYSICAL_STOCK",
+    "CART_VELOCITY_5M",
+    "TELEMETRY_TIMESTAMP",
+]
 
 # PRD formula, evaluated inside Exasol by the LightGBM UDF created in backend/db/exasol/01_inventory_predict_udf.sql:
 #   Buffer = MAX(0, Predicted_Demand_15m - Current_Physical_Stock + Active_Carts_5m)
@@ -288,8 +307,14 @@ def refresh_inventory_telemetry(
     for item_id, stock in stock_rows:
         try:
             velocity = int(tracker.get_cart_velocity(item_id))
-        except Exception as exc:  # Redis unavailable: treat as no carts rather than failing the whole sync
-            logger.warning("[reverse-etl] cart velocity unavailable for %s, using 0: %s", item_id, exc)
+        except (
+            Exception
+        ) as exc:  # Redis unavailable: treat as no carts rather than failing the whole sync
+            logger.warning(
+                "[reverse-etl] cart velocity unavailable for %s, using 0: %s",
+                item_id,
+                exc,
+            )
             velocity = 0
         telemetry.append((str(item_id), int(stock), velocity, now))
 
@@ -297,10 +322,14 @@ def refresh_inventory_telemetry(
     try:
         exasol.execute("DELETE FROM OMNISYNC_ANALYTICS.LIVE_SKU_TELEMETRY")
         if telemetry:
-            exasol.import_from_iterable(telemetry, TELEMETRY_TABLE, import_params={"columns": TELEMETRY_COLUMNS})
+            exasol.import_from_iterable(
+                telemetry, TELEMETRY_TABLE, import_params={"columns": TELEMETRY_COLUMNS}
+            )
     finally:
         exasol.close()
-    logger.info("[reverse-etl] refreshed %d SKU telemetry rows in Exasol", len(telemetry))
+    logger.info(
+        "[reverse-etl] refreshed %d SKU telemetry rows in Exasol", len(telemetry)
+    )
     return {"telemetry_rows": len(telemetry)}
 
 
@@ -324,7 +353,9 @@ def sync_inventory_buffer_to_postgres(
         exasol.close()
 
     db: Session = session if session is not None else SessionLocal()
-    update_stmt = text("UPDATE inventory SET virtual_safety_buffer = :val WHERE item_id = :id")
+    update_stmt = text(
+        "UPDATE inventory SET virtual_safety_buffer = :val WHERE item_id = :id"
+    )
 
     updated_count = 0
     unknown_items = []
@@ -339,7 +370,9 @@ def sync_inventory_buffer_to_postgres(
         db.commit()
     except Exception as exc:
         db.rollback()
-        logger.error(f"[reverse-etl] Failed to update PostgreSQL inventory buffer: {exc}")
+        logger.error(
+            f"[reverse-etl] Failed to update PostgreSQL inventory buffer: {exc}"
+        )
         raise
     finally:
         if session is None:
@@ -347,9 +380,14 @@ def sync_inventory_buffer_to_postgres(
 
     if unknown_items:
         logger.warning(
-            "[reverse-etl] %d telemetry SKUs are not in PostgreSQL inventory: %s", len(unknown_items), unknown_items
+            "[reverse-etl] %d telemetry SKUs are not in PostgreSQL inventory: %s",
+            len(unknown_items),
+            unknown_items,
         )
-    logger.info("[reverse-etl] synced virtual_safety_buffer for %d inventory rows", updated_count)
+    logger.info(
+        "[reverse-etl] synced virtual_safety_buffer for %d inventory rows",
+        updated_count,
+    )
     return {
         "status": "SYNC_COMPLETE",
         "target": "POSTGRES_INVENTORY_BUFFER",
@@ -363,9 +401,17 @@ sync_inventory_buffers_to_postgres = sync_inventory_buffer_to_postgres
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Sync Module 3 metrics from Exasol to PostgreSQL.")
-    parser.add_argument("--setup", action="store_true", help="create the Exasol connection object, then exit")
-    parser.add_argument("--localhost", action="store_true", help="reach both databases on localhost")
+    parser = argparse.ArgumentParser(
+        description="Sync Module 3 metrics from Exasol to PostgreSQL."
+    )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="create the Exasol connection object, then exit",
+    )
+    parser.add_argument(
+        "--localhost", action="store_true", help="reach both databases on localhost"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     host = "localhost" if args.localhost else None

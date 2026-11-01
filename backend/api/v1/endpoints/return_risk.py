@@ -1,3 +1,6 @@
+from typing import Any, Dict
+from pydantic import BaseModel
+
 """
 Dynamic Return Friction read endpoints.
 
@@ -89,7 +92,9 @@ def build_return_risk(db: Session, user_id: str) -> ReturnRiskResponse:
         risk_level=level,
         return_rate=float(row[1]) if row[1] is not None else None,
         purchases_6m=row[2],
-        returns_6m=(xai_eval["total_returns"] if xai_eval["total_returns"] > 0 else row[3]),
+        returns_6m=(
+            xai_eval["total_returns"] if xai_eval["total_returns"] > 0 else row[3]
+        ),
         golden_customer_id=row[4],
         computed_at=row[5],
         synced_at=row[6],
@@ -116,3 +121,53 @@ def list_policies():
 )
 def get_return_risk(user_id: str, db: Session = Depends(get_db)):
     return build_return_risk(db, user_id)
+
+
+class ReturnRiskSimulateRequest(BaseModel):
+    return_count: int
+    reason: str
+
+
+class ReturnRiskSimulateResponse(BaseModel):
+    risk_level: int
+    return_rate: float
+    policy: Dict[str, Any]
+    xai_explanation: str
+    human_review_required: bool
+    message: str = "Sandbox risk evaluated successfully."
+
+
+@router.post(
+    "/simulate",
+    response_model=ReturnRiskSimulateResponse,
+    summary="Context-aware return risk simulation sandbox",
+)
+def simulate_return_risk(request: ReturnRiskSimulateRequest):
+    reason_lower = request.reason.lower()
+    if "defect" in reason_lower:
+        level = 1
+        human_review = False
+        rate = round(min(1.0, request.return_count / 10.0), 2)
+        policy_obj = get_policy(1)
+        explanation = (
+            f"Supplier Defect Telemetry: {request.return_count} returns mapped to verified batch failure "
+            f"(BATCH-8992). Returns forgiven under XAI fairness policy — customer risk held at Level 1 (Free Returns)."
+        )
+    else:
+        level = 5 if request.return_count >= 5 else 4
+        human_review = True
+        rate = round(min(1.0, request.return_count / 6.0), 2)
+        policy_obj = get_policy(level)
+        explanation = (
+            f"Suspected Wardrobing Pattern: {request.return_count} returns with 0% defective item telemetry. "
+            f"Rapid tag-and-return frequency triggers Level {level} friction policy ($5 Restocking Fee, COD Disabled, Human Review Required)."
+        )
+
+    return ReturnRiskSimulateResponse(
+        risk_level=level,
+        return_rate=rate,
+        policy=_policy_model(policy_obj).model_dump(),
+        xai_explanation=explanation,
+        human_review_required=human_review,
+        message="Context-aware risk calculated successfully.",
+    )

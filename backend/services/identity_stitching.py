@@ -56,7 +56,9 @@ def load_sql(file_name: str, params: Dict[str, float]) -> List[str]:
     return load_sql_statements(SQL_DIR / file_name, params)
 
 
-def run_identity_stitching(host: Optional[str] = None, params: Optional[Dict[str, float]] = None) -> Dict[str, int]:
+def run_identity_stitching(
+    host: Optional[str] = None, params: Optional[Dict[str, float]] = None
+) -> Dict[str, int]:
     """
     Rebuild the Golden Record from the raw tables.
 
@@ -68,7 +70,9 @@ def run_identity_stitching(host: Optional[str] = None, params: Optional[Dict[str
     """
     params = {**STITCHING_PARAMS, **(params or {})}
     if params["PROMO_WEIGHT_CAP"] >= abs(params["BIAS"]):
-        raise ValueError("PROMO_WEIGHT_CAP must be smaller than abs(BIAS): promo codes may never merge on their own.")
+        raise ValueError(
+            "PROMO_WEIGHT_CAP must be smaller than abs(BIAS): promo codes may never merge on their own."
+        )
 
     conn = connect_exasol(host=host, schema=SCHEMA, autocommit=False)
     try:
@@ -85,7 +89,9 @@ def run_identity_stitching(host: Optional[str] = None, params: Optional[Dict[str
             for statement in load_sql(file_name, params):
                 conn.execute(statement)
 
-        merged_pairs = conn.execute("SELECT COUNT(*) FROM IDENTITY_PAIR_SCORES WHERE IS_MERGED = 1").fetchval()
+        merged_pairs = conn.execute(
+            "SELECT COUNT(*) FROM IDENTITY_PAIR_SCORES WHERE IS_MERGED = 1"
+        ).fetchval()
         customers = conn.execute("SELECT COUNT(*) FROM GOLDEN_CUSTOMERS").fetchval()
         conn.commit()
     except Exception:
@@ -115,7 +121,9 @@ def _propagate_labels(conn, params: Dict[str, float]) -> int:
         )
         if changed == 0:
             return round_number
-    logger.warning("[identity] label propagation hit the %d-round limit", MAX_PROPAGATION_ROUNDS)
+    logger.warning(
+        "[identity] label propagation hit the %d-round limit", MAX_PROPAGATION_ROUNDS
+    )
     return MAX_PROPAGATION_ROUNDS
 
 
@@ -128,10 +136,14 @@ def _assert_clusters_complete(conn) -> None:
         "WHERE s.IS_MERGED = 1 AND la.CLUSTER_LABEL <> lb.CLUSTER_LABEL"
     ).fetchval()
     if split_pairs:
-        raise RuntimeError(f"{split_pairs} merged pairs ended in different clusters: label propagation incomplete.")
+        raise RuntimeError(
+            f"{split_pairs} merged pairs ended in different clusters: label propagation incomplete."
+        )
 
 
-def generate_identity_investigation(candidate_node_id: str, db) -> Optional[Dict[str, Any]]:
+def generate_identity_investigation(
+    candidate_node_id: str, db
+) -> Optional[Dict[str, Any]]:
     """
     Queries candidate_links and identity_evidence tables to assemble an Explainable AI (XAI)
     identity detective investigation card.
@@ -251,7 +263,11 @@ def generate_identity_investigation(candidate_node_id: str, db) -> Optional[Dict
             )
         )
         if is_counter:
-            clean_event = event[len("COUNTER:") :].strip() if event.upper().startswith("COUNTER:") else event
+            clean_event = (
+                event[len("COUNTER:") :].strip()
+                if event.upper().startswith("COUNTER:")
+                else event
+            )
             if clean_event not in counter_evidence:
                 counter_evidence.append(clean_event)
         else:
@@ -260,7 +276,9 @@ def generate_identity_investigation(candidate_node_id: str, db) -> Optional[Dict
 
     if not supporting_evidence and candidate_rows:
         for cl in candidate_rows:
-            supporting_evidence.append(f"Pairwise graph candidate link between {cl[0]} and {cl[1]}")
+            supporting_evidence.append(
+                f"Pairwise graph candidate link between {cl[0]} and {cl[1]}"
+            )
 
     if not counter_evidence and decision_status == "STRONG_CANDIDATE_PENDING_REVIEW":
         counter_evidence.append("No authenticated login")
@@ -276,7 +294,9 @@ def generate_identity_investigation(candidate_node_id: str, db) -> Optional[Dict
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Rebuild the Golden Record inside Exasol.")
+    parser = argparse.ArgumentParser(
+        description="Rebuild the Golden Record inside Exasol."
+    )
     parser.add_argument(
         "--localhost",
         action="store_true",

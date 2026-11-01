@@ -26,7 +26,9 @@ import lightgbm as lgb
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 logger = logging.getLogger("omnisync.ml.train")
 
 # Define target paths
@@ -35,7 +37,9 @@ WEIGHTS_DIR = BASE_DIR / "weights"
 MODEL_PATH = WEIGHTS_DIR / "inventory_model.txt"
 
 
-def generate_synthetic_cart_data(n_samples: int = 10000, random_seed: int = 42) -> pd.DataFrame:
+def generate_synthetic_cart_data(
+    n_samples: int = 10000, random_seed: int = 42
+) -> pd.DataFrame:
     """
     Generates a realistic synthetic dataset simulating omnichannel e-commerce traffic.
     Simulates peak evening hours and weekend shopping volume spikes.
@@ -60,7 +64,9 @@ def generate_synthetic_cart_data(n_samples: int = 10000, random_seed: int = 42) 
     # 4. Target variable: demand_next_15m
     # Realistic conversion: ~65-80% of carts convert within 15 min, with surges during peak hours
     conversion_rate = 0.72 + (0.05 * (hour_intensity - 1.0))
-    expected_demand = (cart_velocity_5m * conversion_rate) + np.random.normal(0, 2.0, size=n_samples)
+    expected_demand = (cart_velocity_5m * conversion_rate) + np.random.normal(
+        0, 2.0, size=n_samples
+    )
     demand_next_15m = np.maximum(0, np.round(expected_demand)).astype(int)
 
     df = pd.DataFrame(
@@ -90,7 +96,9 @@ def train_and_save_inventory_model(
     X = df[feature_cols]
     y = df[target_col]
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
 
     logger.info("Training LightGBM Regressor (surging demand predictor)...")
     model = lgb.LGBMRegressor(
@@ -107,7 +115,9 @@ def train_and_save_inventory_model(
     y_pred = model.predict(X_test)
     rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
     mae = float(mean_absolute_error(y_test, y_pred))
-    logger.info(f"Model Evaluation -> Test RMSE: {rmse:.3f} units | Test MAE: {mae:.3f} units")
+    logger.info(
+        f"Model Evaluation -> Test RMSE: {rmse:.3f} units | Test MAE: {mae:.3f} units"
+    )
 
     # Ensure output directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)

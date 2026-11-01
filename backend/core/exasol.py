@@ -84,11 +84,15 @@ def init_staging_table(conn: Optional[pyexasol.ExaConnection] = None) -> None:
         should_close = True
 
     try:
-        logger.info("Verifying/creating Exasol schema and staging table OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS...")
+        logger.info(
+            "Verifying/creating Exasol schema and staging table OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS..."
+        )
         conn.execute(CREATE_SCHEMA_QUERY)
         conn.execute(CREATE_STAGING_TABLE_QUERY)
         _STAGING_TABLE_INITIALIZED = True
-        logger.info("Exasol staging table OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS verified successfully.")
+        logger.info(
+            "Exasol staging table OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS verified successfully."
+        )
     except Exception as exc:
         logger.error(f"Failed to initialize Exasol staging table: {exc}")
         raise
@@ -142,10 +146,14 @@ def insert_staging_ticket(
             "status": str(status)[:20],
         }
         conn.execute(insert_sql, query_params=params)
-        logger.info(f"Inserted ticket {ticket_id} into OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS.")
+        logger.info(
+            f"Inserted ticket {ticket_id} into OMNISYNC_ANALYTICS.STAGING_ZENDESK_TICKETS."
+        )
     except pyexasol.ExaQueryError as eqe:
         # If table was dropped or missing, attempt self-healing initialization and retry once
-        logger.warning(f"Exasol query error during staging insert ({eqe}). Retrying after table initialization...")
+        logger.warning(
+            f"Exasol query error during staging insert ({eqe}). Retrying after table initialization..."
+        )
         init_staging_table(conn)
         conn.execute(insert_sql, query_params=params)
     finally:
@@ -173,11 +181,15 @@ def register_churn_udf(
         should_close = True
 
     try:
-        logger.info("Registering OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE UDF in Exasol...")
+        logger.info(
+            "Registering OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE UDF in Exasol..."
+        )
         conn.execute(CREATE_SCHEMA_QUERY)
         udf_sql = get_churn_udf_sql(bucketfs_model_path=bucketfs_path)
         conn.execute(udf_sql)
-        logger.info("OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE UDF registered successfully.")
+        logger.info(
+            "OMNISYNC_ANALYTICS.PREDICT_CHURN_SCORE UDF registered successfully."
+        )
     except Exception as exc:
         logger.error(f"Failed to register churn UDF in Exasol: {exc}")
         raise

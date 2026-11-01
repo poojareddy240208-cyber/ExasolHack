@@ -11,15 +11,25 @@ import pytest
 
 from backend.celery_app import celery
 from backend.services import reverse_etl
-from backend.services.reverse_etl import EXPORTS, UPSERT_SQL, build_export_statement, sync_module3_to_postgres
+from backend.services.reverse_etl import (
+    EXPORTS,
+    UPSERT_SQL,
+    build_export_statement,
+    sync_module3_to_postgres,
+)
 
 
 def _fake_postgres(lock_granted=True, staged_counts=(5, 7, 9)):
     """A fake psycopg2 connection that records every executed statement."""
     executed = []
     cursor = MagicMock()
-    cursor.execute.side_effect = lambda sql, *args: executed.append(" ".join(str(sql).split()))
-    cursor.fetchone.side_effect = [(lock_granted,), *[(count,) for count in staged_counts]]
+    cursor.execute.side_effect = lambda sql, *args: executed.append(
+        " ".join(str(sql).split())
+    )
+    cursor.fetchone.side_effect = [
+        (lock_granted,),
+        *[(count,) for count in staged_counts],
+    ]
     pg = MagicMock()
     pg.cursor.return_value.__enter__.return_value = cursor
     return pg, executed
@@ -47,7 +57,10 @@ def test_export_statements_use_export_into_jdbc_with_matching_placeholders():
 
 def test_beat_schedule_syncs_every_5_minutes_and_tasks_are_registered():
     entries = {entry["task"]: entry for entry in celery.conf.beat_schedule.values()}
-    assert entries["backend.celery_app.trigger_exasol_return_risk_sync"]["schedule"] == 300.0
+    assert (
+        entries["backend.celery_app.trigger_exasol_return_risk_sync"]["schedule"]
+        == 300.0
+    )
     assert "backend.celery_app.trigger_identity_stitching_batch" in entries
     for task_name in entries:
         assert task_name in celery.tasks, f"{task_name} is scheduled but not registered"
@@ -66,7 +79,9 @@ def test_successful_sync_stages_then_upserts_in_one_commit():
     truncates = [i for i, sql in enumerate(pg_sql) if sql.startswith("TRUNCATE")]
     upserts = [i for i, sql in enumerate(pg_sql) if "ON CONFLICT" in sql]
     assert truncates and upserts and max(truncates) < min(upserts)
-    assert len([sql for sql in pg_sql if sql.startswith(("INSERT INTO", "DELETE FROM"))]) == len(UPSERT_SQL)
+    assert len(
+        [sql for sql in pg_sql if sql.startswith(("INSERT INTO", "DELETE FROM"))]
+    ) == len(UPSERT_SQL)
     pg.rollback.assert_not_called()
 
 
@@ -79,7 +94,9 @@ def test_empty_stage_aborts_without_touching_serving_tables():
         with pytest.raises(RuntimeError, match="Stage check failed"):
             sync_module3_to_postgres()
 
-    assert not any("ON CONFLICT" in sql or sql.startswith("DELETE FROM") for sql in pg_sql)
+    assert not any(
+        "ON CONFLICT" in sql or sql.startswith("DELETE FROM") for sql in pg_sql
+    )
     pg.rollback.assert_called()
 
 
@@ -105,7 +122,9 @@ def test_sync_inventory_buffer_to_postgres_success():
     mock_exasol.execute.return_value = mock_stmt
 
     mock_session = MagicMock()
-    mock_session.execute.return_value.rowcount = 1  # each UPDATE matched one inventory row
+    mock_session.execute.return_value.rowcount = (
+        1  # each UPDATE matched one inventory row
+    )
 
     with patch("backend.services.reverse_etl.connect_exasol", return_value=mock_exasol):
         result = sync_inventory_buffer_to_postgres(session=mock_session)
@@ -115,7 +134,9 @@ def test_sync_inventory_buffer_to_postgres_success():
     assert mock_exasol.execute.call_count == 1
     query_executed = mock_exasol.execute.call_args[0][0]
     assert "OMNISYNC_ANALYTICS.LIVE_SKU_TELEMETRY" in query_executed
-    assert "VIRTUAL_SAFETY_BUFFER" in query_executed  # computed by the UDF query, not a stored column
+    assert (
+        "VIRTUAL_SAFETY_BUFFER" in query_executed
+    )  # computed by the UDF query, not a stored column
 
     assert mock_session.execute.call_count == 2
     mock_session.commit.assert_called_once()
@@ -146,10 +167,14 @@ def test_trigger_exasol_inventory_sync_celery_task():
     from backend.celery_app import trigger_exasol_inventory_sync
 
     calls = []
-    with patch("backend.services.reverse_etl.refresh_inventory_telemetry") as mock_refresh, patch(
+    with patch(
+        "backend.services.reverse_etl.refresh_inventory_telemetry"
+    ) as mock_refresh, patch(
         "backend.services.reverse_etl.sync_inventory_buffer_to_postgres"
     ) as mock_sync:
-        mock_refresh.side_effect = lambda: calls.append("refresh") or {"telemetry_rows": 3}
+        mock_refresh.side_effect = lambda: calls.append("refresh") or {
+            "telemetry_rows": 3
+        }
         mock_sync.side_effect = lambda: calls.append("sync") or {
             "status": "SYNC_COMPLETE",
             "target": "POSTGRES_INVENTORY_BUFFER",
@@ -157,6 +182,9 @@ def test_trigger_exasol_inventory_sync_celery_task():
         }
         result = trigger_exasol_inventory_sync()
 
-    assert calls == ["refresh", "sync"]  # inputs must be loaded before the buffer is computed
+    assert calls == [
+        "refresh",
+        "sync",
+    ]  # inputs must be loaded before the buffer is computed
     assert result["status"] == "SYNC_COMPLETE"
     assert result["telemetry_rows"] == 3

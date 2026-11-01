@@ -50,7 +50,13 @@ def _to_view(row, active_carts: Optional[int]) -> InventoryItemView:
 
 
 # Only the needed columns are selected: loading whole Inventory rows would also load every sales_ledger row of the SKU.
-_COLUMNS = (Inventory.item_id, Inventory.name, Inventory.stock, Inventory.version, Inventory.virtual_safety_buffer)
+_COLUMNS = (
+    Inventory.item_id,
+    Inventory.name,
+    Inventory.stock,
+    Inventory.version,
+    Inventory.virtual_safety_buffer,
+)
 
 
 @router.get(
@@ -58,20 +64,27 @@ _COLUMNS = (Inventory.item_id, Inventory.name, Inventory.stock, Inventory.versio
     response_model=InventoryListResponse,
     summary="List inventory with safety buffers and live cart velocity",
 )
-def list_inventory(db: Session = Depends(get_db), tracker: CartVelocityTracker = Depends(get_cart_tracker)):
+def list_inventory(
+    db: Session = Depends(get_db),
+    tracker: CartVelocityTracker = Depends(get_cart_tracker),
+):
     try:
         rows = db.query(*_COLUMNS).order_by(Inventory.item_id).all()
     except SQLAlchemyError as exc:
         db.rollback()
         logger.warning("Inventory query failed: %s", exc)
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=UNAVAILABLE_DETAIL)
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, detail=UNAVAILABLE_DETAIL
+        )
 
     carts = [_carts_or_none(tracker, row.item_id) for row in rows]
     redis_ok = all(count is not None for count in carts)
     return InventoryListResponse(
         generated_at=datetime.now(timezone.utc),
         total_items=len(rows),
-        total_active_carts_5m=sum(carts) if rows and redis_ok else (0 if not rows else None),
+        total_active_carts_5m=(
+            sum(carts) if rows and redis_ok else (0 if not rows else None)
+        ),
         redis_available=redis_ok,
         items=[_to_view(row, count) for row, count in zip(rows, carts)],
     )
@@ -84,14 +97,21 @@ def list_inventory(db: Session = Depends(get_db), tracker: CartVelocityTracker =
     responses={404: {"description": "Item not in the catalog"}},
 )
 def get_inventory_item(
-    item_id: str, db: Session = Depends(get_db), tracker: CartVelocityTracker = Depends(get_cart_tracker)
+    item_id: str,
+    db: Session = Depends(get_db),
+    tracker: CartVelocityTracker = Depends(get_cart_tracker),
 ):
     try:
         row = db.query(*_COLUMNS).filter(Inventory.item_id == item_id).first()
     except SQLAlchemyError as exc:
         db.rollback()
         logger.warning("Inventory query failed: %s", exc)
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=UNAVAILABLE_DETAIL)
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, detail=UNAVAILABLE_DETAIL
+        )
     if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Item '{item_id}' not found in product catalog.")
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=f"Item '{item_id}' not found in product catalog.",
+        )
     return _to_view(row, _carts_or_none(tracker, item_id))

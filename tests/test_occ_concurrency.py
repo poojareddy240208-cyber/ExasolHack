@@ -111,7 +111,9 @@ def test_zendesk_webhook_endpoint(client: TestClient):
         "priority": "high",
         "status": "new",
     }
-    with patch("backend.celery_app.process_zendesk_ticket_task.apply_async") as mock_apply_async:
+    with patch(
+        "backend.celery_app.process_zendesk_ticket_task.apply_async"
+    ) as mock_apply_async:
         mock_task = MagicMock()
         mock_task.id = "mock_task_123"
         mock_apply_async.return_value = mock_task
@@ -151,7 +153,9 @@ def test_zendesk_webhook_broker_outage_returns_503(client: TestClient):
 # ------------------------------------------------------------------------------
 # Finalized Checkout API & Predictive Failsafe Tests
 # ------------------------------------------------------------------------------
-def test_checkout_endpoint_success_and_cart_cleanup(client: TestClient, db_session, mock_cart_tracker):
+def test_checkout_endpoint_success_and_cart_cleanup(
+    client: TestClient, db_session, mock_cart_tracker
+):
     """
     Verifies successful checkout:
     1. Returns HTTP 200.
@@ -190,13 +194,19 @@ def test_checkout_endpoint_success_and_cart_cleanup(client: TestClient, db_sessi
     assert db_item.version == 2
 
     # Verify SalesLedger audit record
-    sale = db_session.query(SalesLedger).filter(SalesLedger.item_id == "SKU-PS5-CONSOLE").first()
+    sale = (
+        db_session.query(SalesLedger)
+        .filter(SalesLedger.item_id == "SKU-PS5-CONSOLE")
+        .first()
+    )
     assert sale is not None
     assert sale.quantity == 2
     assert sale.user_id == "sess_shopper_882"
 
     # Verify Redis cart cleanup invocation
-    mock_cart_tracker.remove_from_cart.assert_called_with("SKU-PS5-CONSOLE", "sess_shopper_882")
+    mock_cart_tracker.remove_from_cart.assert_called_with(
+        "SKU-PS5-CONSOLE", "sess_shopper_882"
+    )
 
 
 def test_checkout_predictive_safety_buffer_failsafe(client: TestClient, db_session):
@@ -225,7 +235,8 @@ def test_checkout_predictive_safety_buffer_failsafe(client: TestClient, db_sessi
     assert response.status_code == 409
     data = response.json()
     assert (
-        data["detail"] == "Item is in extremely high demand and currently reserved. Please try again in a few minutes."
+        data["detail"]
+        == "Item is in extremely high demand and currently reserved. Please try again in a few minutes."
     )
 
 
@@ -309,7 +320,9 @@ class OCCLedgerSimulator:
             self.version += 1
 
             # Invariant: Physical stock must never drop below 0
-            assert self.stock >= 0, f"Critical constraint violation: negative stock detected ({self.stock})!"
+            assert (
+                self.stock >= 0
+            ), f"Critical constraint violation: negative stock detected ({self.stock})!"
 
             return {
                 "success": True,
@@ -331,7 +344,9 @@ def test_high_concurrency_race_condition_50_threads_5_items():
     """
     TOTAL_ITEMS = 5
     NUM_THREADS = 50
-    simulator = OCCLedgerSimulator(item_id="FLASH-SALE-PS5", initial_stock=TOTAL_ITEMS, initial_version=1)
+    simulator = OCCLedgerSimulator(
+        item_id="FLASH-SALE-PS5", initial_stock=TOTAL_ITEMS, initial_version=1
+    )
 
     results: List[Dict[str, Any]] = []
 
@@ -355,5 +370,9 @@ def test_high_concurrency_race_condition_50_threads_5_items():
     assert len(failed_purchases) == (
         NUM_THREADS - TOTAL_ITEMS
     ), f"Expected exactly {NUM_THREADS - TOTAL_ITEMS} failed attempts, but got {len(failed_purchases)}"
-    assert simulator.stock == 0, f"Expected final stock to be 0, but got {simulator.stock}"
-    assert simulator.version == 6, f"Expected final version to be 6, but got {simulator.version}"
+    assert (
+        simulator.stock == 0
+    ), f"Expected final stock to be 0, but got {simulator.stock}"
+    assert (
+        simulator.version == 6
+    ), f"Expected final version to be 6, but got {simulator.version}"

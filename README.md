@@ -1,4 +1,4 @@
-# ⚡ OmniSync: Intelligent Retail Analytics & Concurrency Engine
+# ⚡ OmniSync: Explainable AI Retail Operations
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
@@ -9,23 +9,74 @@
 [![Celery](https://img.shields.io/badge/Celery-5.3+-37814A.svg)](https://docs.celeryq.dev/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.32+-FF4B4B.svg)](https://streamlit.io/)
 
-> Built for the **Exasol Hackathon**: Bridging the gap between real-time transactional checkout and in-database machine learning intelligence.
+> **Real-Time Retail Intelligence & Concurrency Defense Engine**  
+> OmniSync unifies low-latency transactional execution with in-database machine learning to eradicate overselling, resolve fragmented identities, personalize return friction without checkout latency, and autonomously intercept VIP customer churn. Every decision is mathematically provable, explainable by design (XAI), and governed by human oversight.
 
 ---
 
-## 📌 The Problem
-Modern omnichannel retail brands lose tens of millions annually to four systemic operational blindspots:
+## 🎯 1. The Problem: 4 Critical Retail Blindspots
 
-1. **Identity Blindspots**: Fragmented guest checkouts, mobile app cookies, and distinct device IDs prevent brands from recognizing repeat customers, resulting in disconnected customer journeys.
-2. **Ghost Stockouts & Overselling**: Concurrent flash sales trigger race conditions where inventory counts lag behind active shopping carts, leading to oversold stock and forced cancellations.
-3. **Margin-Eroding Returns**: Blanket "free returns" policies encourage serial returners and wardrobing, drastically reducing margins without personalized friction or incentives.
-4. **Silent VIP Churn**: High-value customers facing unresolved support tickets churn quietly weeks before traditional analytics flags their dissatisfaction.
+Modern omnichannel retail enterprises bleed tens of millions of dollars each year across four disconnected operational silos:
+
+| Operational Challenge | Root Cause & Failure Mode | Enterprise Impact |
+| :--- | :--- | :--- |
+| **1. Ghost Stockouts & Viral Overselling** | Concurrent checkout spikes (flash sales, viral TikTok surges) cause database race conditions. Inventory counts lag behind live shopping carts, resulting in overselling beyond physical stock. | Forced order cancellations, chargebacks, wasted fulfillment fees, and permanent brand erosion. |
+| **2. Fragmented Customer Identity** | Shoppers switch between anonymous mobile cookies, guest checkouts, desktop browsers, and support channels. Naive identity stitching merges disparate users who simply share coupon codes (Honey promo code leakage). | Distorted Lifetime Value (LTV) models, misplaced VIP allocations, and compliance violations. |
+| **3. Margin-Eroding Blanket Return Policies** | Retailers enforce rigid blanket return rules. "Free returns" invite serial wardrobing abuse (buying items to wear once and return), while blunt return-rate thresholds unfairly penalize loyal VIPs affected by supplier factory defects. | Surging reverse-logistics freight costs, inventory liquidation loss, and alienated high-value shoppers. |
+| **4. Silent VIP Support Churn** | Unhappy high-LTV customers submit frustrated support tickets that linger in standard FIFO queues. Traditional BI pipelines detect churn weeks after the customer has permanently abandoned the platform. | Irreversible VIP attrition, negative public sentiment, and missed retention rescue windows. |
 
 ---
 
-## 💡 The Solution: Hybrid OLTP / OLAP Architecture
+## 💡 2. The OmniSync Solution: Detect → Explain → Decide → Act → Verify
 
-**OmniSync** resolves these challenges through a strict separation of concerns between transactional ledgers and in-memory analytics:
+OmniSync replaces black-box heuristics with a closed-loop **Explainable AI (XAI)** operational pipeline:
+
+```
+    ┌──────────┐      ┌───────────┐      ┌──────────┐      ┌────────┐      ┌──────────┐
+    │  DETECT  │ ───► │  EXPLAIN  │ ───► │  DECIDE  │ ───► │  ACT   │ ───► │  VERIFY  │
+    └──────────┘      └───────────┘      └──────────┘      └────────┘      └──────────┘
+     Live Redis        In-Database        Predictive        Postgres OCC    Streamlit
+     Telemetry &       PyTorch & UDF      Safety Buffer     Transaction     Command Center
+     Webhooks          Attribution        & Policy Tier     & Eviction      & Human Audit
+```
+
+### The 5-Stage XAI Operating Loop:
+
+1. **Detect (Real-Time Ingestion)**
+   - Redis sliding-window sorted sets (`cart:{item_id}`) monitor real-time cart velocity over rolling 5-minute intervals.
+   - Asynchronous webhook receivers ingest Zendesk support inquiries into Celery with immediate `202 Accepted` acknowledgments, eliminating gateway timeouts.
+   - Behavioral web events stream natively into Exasol JSON stores.
+
+2. **Explain (In-Database Machine Learning)**
+   - **PyTorch Transformer UDFs** in Exasol score customer support sentiment, classify urgency, and extract root-cause attributions directly within database memory.
+   - **Identity Detective**: Exasol’s graph stitching evaluates probabilistic link confidence, presenting operators with clear supporting signals (shared device fingerprint, sequential cart-to-phone handoffs) alongside explicit counter-evidence (differing browser locales).
+   - **Context-Aware Return Risk**: Distinguishes customer culpability from product failure by correlating returns against supplier batch defect telemetry (e.g., forgiving returns tied to verified factory defect `BATCH-8992`).
+
+3. **Decide (Predictive Guardrails & Policy Tiers)**
+   - **Dynamic Virtual Safety Buffer**: Exasol LightGBM models forecast 15-minute demand velocity to dynamically hold inventory:
+     $$\text{Buffer} = \max(0, \text{Predicted\_Demand\_15m} - \text{Physical\_Stock} + \text{Active\_Carts\_5m})$$
+   - **Zero-Latency Return Policies**: Pre-calculates 5 friction tiers (Level 1: Free Instant Label $\to$ Level 5: Restocking Fee, COD Disabled, Mandatory Human Review) and syncs them to PostgreSQL for 0ms runtime checkout reads.
+   - **VIP Churn Radar**: Cross-references customer sentiment with top 20% LTV metrics to flag accounts with Churn Probability $\ge 0.85$.
+
+4. **Act (Deterministic Execution & OCC Guard)**
+   - **Optimistic Concurrency Control (OCC)**: PostgreSQL enforces strict version checking and non-negative constraints (`CHECK (physical_stock >= 0)`):
+     ```sql
+     UPDATE inventory 
+     SET physical_stock = physical_stock - :qty, version = version + 1 
+     WHERE item_id = :id AND version = :read_version AND physical_stock >= :qty;
+     ```
+   - Two-phase inventory reservation lifecycle (`PENDING` $\to$ atomic payment $\to$ `COMPLETED`).
+   - Automated retention actions (expedited carrier telemetry, VIP concierge outreach, instant goodwill credits) with idempotency guards to prevent duplicate execution.
+
+5. **Verify (Human-in-the-Loop Governance)**
+   - Mission-critical actions surface in the Streamlit Command Center with clear XAI explanations.
+   - Human operators have instant authority to approve/reject identity merges or trigger VIP retention playbooks with full immutable audit logging.
+
+---
+
+## 🏛️ 3. Architecture Stack: Hybrid OLTP / OLAP Separation
+
+OmniSync maintains a strict architectural boundary between low-latency transactional execution and heavy analytical intelligence:
 
 ```
                +-------------------------------------------------------+
@@ -38,7 +89,7 @@ Modern omnichannel retail brands lose tens of millions annually to four systemic
      |     PostgreSQL 15 (OLTP)      |   |        Redis Alpine         |
      |  * Product Catalog            |   |  * 5-min Cart Velocity      |
      |  * Strict OCC Ledgers         |   |  * Celery Task Broker       |
-     |  * CHECK(stock >= 0)          |   +--------------+--------------+
+     |  * CHECK(physical_stock >= 0) |   +--------------+--------------+
      |  * Pre-computed Risk Cache    |                  |
      +---------------+---------------+                  v
                      ^                   +-----------------------------+
@@ -57,142 +108,122 @@ Modern omnichannel retail brands lose tens of millions annually to four systemic
      +-----------------------------------------------------------------+
 ```
 
-- **PostgreSQL (OLTP)**: Handles the catalog, customer checkout transactions, and strict **Optimistic Concurrency Control (OCC)** failsafes to eliminate overselling without database deadlocks.
-- **Exasol Personal Edition (OLAP - "The Brain")**: Acts as the central in-memory intelligence engine. Models (**LightGBM** and **PyTorch**) are trained and executed directly inside Exasol via **Python UDFs**, storing model weights natively in **BucketFS**. No sensitive data leaves Exasol for inference.
-- **Celery + Redis**: Ingests high-frequency webhook events asynchronously to prevent gateway timeouts, and orchestrates periodic batch data synchronization from Exasol to PostgreSQL.
+### Component Breakdown:
+
+- **PostgreSQL 15 (Transactional OLTP)**:
+  - Serves as the system of record for inventory, reservations, and sales transactions.
+  - Enforces atomic inventory decrements, optimistic version increments, and mathematical non-negative constraints.
+  - Houses the indexed `user_risk_cache` for sub-millisecond return friction lookups during customer checkout.
+- **Exasol In-Memory OLAP (The Analytical Brain)**:
+  - Executes massively parallel processing (MPP) analytical queries on behavioral and transaction data.
+  - Runs in-database Python UDFs for LightGBM surge forecasting and PyTorch Transformer ticket classification.
+  - **BucketFS Integration**: Model weights remain stored natively inside Exasol's secure BucketFS, guaranteeing that sensitive customer data never leaves database boundaries for external inference.
+  - Executes scheduled reverse ETL (`EXPORT INTO JDBC`) to keep PostgreSQL caches synchronized.
+- **Redis 7 (Alpine)**:
+  - Tracks live shopper cart additions via sorted sets (`ZSET`) expiring outside a rolling 5-minute sliding window.
+  - Powers low-latency message queuing for Celery task workers.
+- **Celery Worker & Celery Beat**:
+  - Asynchronously consumes high-frequency webhook streams from customer support and checkout ingress.
+  - Coordinates periodic synchronization between Exasol analytical models and PostgreSQL operational tables.
+  - Runs automated cleanup reapers to release expired pending reservations (`expires_at < NOW()`).
+- **FastAPI Gateway**:
+  - Exposes clean, OpenAPI-compliant endpoints with strict Pydantic v2 data validation.
+  - Guarantees 0ms added checkout latency by decoupling complex analytics from the live order path.
+- **Streamlit Command Center**:
+  - Premium editorial monochrome interface (`#F7F7F5` canvas, `#20201E` dark surfaces, soft semantic badges).
+  - Provides interactive simulators for inventory checkout locks, identity governance, return risk recalculation, and live support ticket NLP interception.
 
 ---
 
-## 🚀 Core Functional Modules
+## 🖥️ 4. UI Showcase: The OmniSync Command Center
 
-### 1. Identity Stitching (The Golden Record)
-- Natively ingests unstructured JSON web-behavior events directly into Exasol.
-- Runs probabilistic identity resolution to unify anonymous guest cookies and known user profiles.
-- **Strict Anti-Leak Constraint**: *"Promo Code Leakage"* is treated purely as a weighted feature in a probabilistic model, **never** as a deterministic match, preventing coupon aggregator sites (e.g., Honey) from mistakenly merging thousands of distinct users.
+The OmniSync Streamlit frontend is a high-performance operator console designed for clarity, explainability, and immediate human governance:
 
-### 2. Predictive Inventory & OCC Failsafe
-- Redis continuously tracks active cart velocities within a rolling **5-minute window**.
-- Celery beat periodically triggers Exasol's **LightGBM UDF** to forecast 15-minute demand surges and compute the **Virtual Safety Stock Buffer**:
-  $$\text{Buffer} = \max(0, \text{Predicted\_Demand\_15m} - \text{Current\_Physical\_Stock} + \text{Active\_Carts\_5m})$$
-- Celery beat executes an `EXPORT ... INTO JDBC` command from Exasol to update PostgreSQL.
-- **Postgres OCC Concurrency Guard**:
-  ```sql
-  UPDATE inventory 
-  SET stock = stock - :qty, version = version + 1 
-  WHERE item_id = :id AND version = :read_version AND stock >= :qty;
-  ```
-  *(Postgres strictly enforces `CHECK (stock >= 0)` at the schema level).*
-
-### 3. Dynamic Return Friction (0ms Latency Addition)
-- An Exasol batch job runs a native PyTorch model against the Golden Record to pre-calculate Return Risk Levels:
-  - **Level 1 (<10% return rate)**: Standard Free Return & instant prepaid label.
-  - **Level 3 (25-40% return rate)**: Friction offer — *"Keep it for an instant 10% bonus credit"*.
-  - **Level 5 (>60% return rate)**: Penalty guard — $5 Restocking fee warning and disable Cash on Delivery.
-- Risk levels are pre-computed and stored in Postgres. The checkout and return UI reads these static integers, adding **0ms latency** to the live user experience.
-
-### 4. NLP Churn Early Warning Radar
-- Zendesk support webhooks drop payloads directly into Celery to eliminate API gateway timeouts.
-- In-database PyTorch Transformer UDFs score customer ticket sentiment.
-- A native Exasol SQL JOIN flags customers with **Churn Probability $\ge 0.85$** who are in the **Top 20% LTV (VIPs)**, dispatching alerts to retention marketing systems.
+### Tab 1: Inventory Surge & OCC Defense
+Real-time inventory twin correlating Exasol demand predictions with PostgreSQL physical stock. Operators can trigger viral shopper surges and verify that concurrent checkouts are mathematically blocked via Optimistic Concurrency Control (OCC) version stamps.
+![Inventory Surge](docs/screenshots/tab1_inventory_surge.jpg)
 
 ---
 
-## 📋 System Prerequisites & Hardware Specs
-
-- **Docker & Docker Compose**: Compose v2+ installed.
-- **Host Memory**: **Minimum 8GB RAM** allocated to the Docker daemon (Exasol Personal Edition requires at least 4GB dedicated RAM).
-- **Privileged Mode**: The Exasol Personal Edition container **MUST** run with the `--privileged` flag in Docker (already configured in `docker-compose.yml`).
+### Tab 2: Identity Detective & Evidence Graph
+Investigate multi-channel customer identity links. The interface displays probabilistic match confidence scores alongside transparent supporting signals and counter-evidence, backed by a human governance layer to approve or reject merges.
+![Identity Detective](docs/screenshots/tab2_identity.jpg)
 
 ---
 
-## ⚡ Quickstart
+### Tab 3: Context-Aware Returns & Risk Sandbox
+Fair AI policy engine distinguishing between genuine supplier defects and deliberate serial wardrobing. Includes an interactive Risk Sandbox slider and selector to demonstrate real-time policy adjustments based on causal context.
+![Context Returns](docs/screenshots/tab3_returns.jpg)
 
-### 1. Clone & Configure Environment
+---
+
+### Tab 4: NLP Ticket Radar & Live Interception
+Autonomous VIP retention radar powered by in-database PyTorch NLP UDFs. Operators can intercept critical churn risks, review model sentiment and root-cause explanations, and type custom tickets into the Live Interception console for immediate real-time classification.
+![NLP Ticket Radar](docs/screenshots/tab4_nlp_radar.jpg)
+
+---
+
+## 🚀 5. Local Setup & Quickstart
+
+OmniSync is containerized with Docker Compose for single-command orchestration across all 7 services.
+
+### Prerequisites:
+- **Docker & Docker Compose** (Compose v2+ recommended)
+- **Host Memory**: Minimum **8GB RAM** allocated to the Docker engine (Exasol Personal Edition requires at least 4GB dedicated memory)
+- **Privileged Mode**: Docker daemon must permit `--privileged` execution for Exasol (pre-configured in `docker-compose.yml`)
+
+### Step-by-Step Instructions:
+
 ```bash
+# 1. Clone the repository
 git clone https://github.com/poojareddy240208-cyber/ExasolHack.git
 cd ExasolHack
 
-# Copy the environment file
+# 2. Configure environment variables
 cp .env.example .env
-```
 
-### 2. Launch Entire Platform via Docker Compose
-A single command builds and orchestrates FastAPI, PostgreSQL, Redis, Celery Worker, Celery Beat, Streamlit, and Exasol:
-
-```bash
+# 3. Build and launch the unified platform
 docker-compose up -d --build
+
+# 4. View container logs to verify boot sequence
+docker-compose logs -f
 ```
 
-### 3. Access Live Interfaces
-| Service | URL | Description |
+### Service Endpoints:
+
+| Service | Access URL | Credentials / Notes |
 | :--- | :--- | :--- |
-| **Streamlit Dashboard** | [http://localhost:8501](http://localhost:8501) | Customer Success & Analytics Hub |
-| **FastAPI Swagger Docs** | [http://localhost:8000/docs](http://localhost:8000/docs) | Interactive API Explorer |
-| **FastAPI Health Check** | [http://localhost:8000/health](http://localhost:8000/health) | Live Infrastructure Liveness Probe |
-| **Exasol SQL Interface** | `localhost:8563` | Analytics Database Connection |
-| **Exasol BucketFS** | `http://localhost:2580` | Native Model Weight Storage |
+| **Streamlit Command Center** | [http://localhost:8501](http://localhost:8501) | Live Operator Workspace |
+| **FastAPI Interactive Docs** | [http://localhost:8000/docs](http://localhost:8000/docs) | Swagger UI for API Exploration |
+| **API Health & Infra Probe** | [http://localhost:8000/health](http://localhost:8000/health) | System Liveness Diagnostic |
+| **Exasol SQL Interface** | `localhost:8563` | User: `sys` / Password: in `.env` |
+| **Exasol BucketFS Storage** | `http://localhost:2580` | Native Model Weight Repository |
 
 ---
 
-## 📂 Project Structure
+## 🧪 6. Testing & Concurrency Verification
 
-```
-ExasolHack/
-├── .github/
-│   └── workflows/
-│       └── ci.yml             # GitHub Actions CI for flake8 and black
-├── backend/
-│   ├── api/
-│   │   └── v1/
-│   │       ├── endpoints/
-│   │       │   ├── checkout.py# OCC transactional checkout endpoint
-│   │       │   ├── health.py  # Health diagnostics
-│   │       │   └── webhooks.py# Zendesk webhook ingestion endpoint
-│   │       └── router.py      # APIRouter aggregation
-│   ├── core/
-│   │   └── config.py          # Pydantic v2 application settings
-│   ├── schemas/
-│   │   ├── checkout.py        # Pydantic checkout & OCC request/response schemas
-│   │   └── webhook.py         # Pydantic Zendesk webhook models
-│   ├── celery_app.py          # Celery worker tasks & periodic Beat schedule
-│   ├── main.py                # FastAPI application entrypoint & middleware
-│   └── __init__.py
-├── frontend/
-│   ├── app.py                 # Streamlit retail analytics dashboard
-│   └── __init__.py
-├── tests/
-│   ├── __init__.py
-│   └── test_occ_concurrency.py# Pytest suite simulating 50 concurrent threads
-├── .env.example               # Environment template with credentials & ports
-├── .gitignore                 # Standard Python, Node, Docker, weights & env ignores
-├── Dockerfile                 # Multi-stage Python build for backend & Celery
-├── Dockerfile.frontend        # Streamlit dashboard container build
-├── docker-compose.yml         # 7-container unified stack configuration
-├── LICENSE                    # MIT Open Source License
-├── prd.md                     # Product Requirements Document & specifications
-├── requirements.txt           # Verified Python dependencies
-└── README.md                  # Comprehensive architectural documentation
-```
-
----
-
-## 🧪 Testing Concurrency & Race Conditions
-
-To simulate high-concurrency race conditions (e.g., 50 threads attempting to purchase the last 5 items) and verify Optimistic Concurrency Control (OCC):
+To verify race condition protection, Optimistic Concurrency Control (OCC), and the live API bridge:
 
 ```bash
-# Run the race-condition test suite
+# Run the complete automated test suite
+pytest -v
+
+# Run OCC high-concurrency race condition simulations (50 competing threads)
 pytest tests/test_occ_concurrency.py -v
+
+# Run the live dashboard API bridge test suite
+pytest tests/test_live_bridge.py -v
 ```
 
 ---
 
-## 🛡️ Hackathon Rules of Engagement Adherence
+## 🛡️ Hackathon Constraints & Architecture Compliance
 
-1. **Zero External Model Training**: Models are trained inside Exasol UDFs; weights remain securely inside BucketFS.
-2. **Factual Performance Constraints**: We guarantee 0ms checkout latency added through pre-computed risk integer lookups and strict Postgres `CHECK` constraints.
-3. **Probabilistic Promo Resolution**: Never merge profiles on shared coupons alone.
-4. **Passive Exasol Architecture**: Celery Beat serves as the active driver executing `EXPORT ... INTO JDBC`.
+1. **Zero External Data Exfiltration**: PyTorch and LightGBM models execute directly inside Exasol Python UDFs. Model weights are stored securely in Exasol BucketFS.
+2. **0ms Added Checkout Latency**: Return risk levels and safety buffers are pre-computed in analytical batches and synced to PostgreSQL. Live checkout operations execute simple O(1) primary key reads.
+3. **Probabilistic Coupon Attribution**: Shared promo codes are treated strictly as probabilistic graph weights and never as deterministic identity merge keys, preventing coupon aggregator cross-contamination.
+4. **Governed Automation**: High-impact actions (identity merges, retention incentives, high-risk return penalties) require human operator sign-off before downstream execution.
 
 ---
 

@@ -9,7 +9,9 @@ from frontend.services import status_probe
 
 def fetch(response=None, error=None):
     status_probe.get_system_health.clear()
-    with patch.object(status_probe.requests, "get", side_effect=error, return_value=response):
+    with patch.object(
+        status_probe.requests, "get", side_effect=error, return_value=response
+    ):
         return status_probe.get_system_health()
 
 
@@ -23,7 +25,14 @@ def reply(status=200, payload=None, json_error=False):
 
 
 def test_success_passes_the_api_answer_through():
-    health = fetch(reply(payload={"status": "DEGRADED", "services": {"exasol_olap": {"status": "DOWN"}}}))
+    health = fetch(
+        reply(
+            payload={
+                "status": "DEGRADED",
+                "services": {"exasol_olap": {"status": "DOWN"}},
+            }
+        )
+    )
     assert health["error"] is None
     assert health["services"]["exasol_olap"]["status"] == "DOWN"
 

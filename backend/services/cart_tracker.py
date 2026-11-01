@@ -30,7 +30,11 @@ class CartVelocityTracker:
 
     DEFAULT_WINDOW_SECONDS: int = 300  # 5-minute rolling window
 
-    def __init__(self, redis_client: Optional[Union[redis.Redis, Any]] = None, redis_url: Optional[str] = None):
+    def __init__(
+        self,
+        redis_client: Optional[Union[redis.Redis, Any]] = None,
+        redis_url: Optional[str] = None,
+    ):
         """
         Initialize the cart tracker with a Redis client or connection URL.
         If no client is supplied, connects using settings.REDIS_URL.
@@ -46,7 +50,9 @@ class CartVelocityTracker:
         """Standardized Redis key format for item cart sets."""
         return f"cart:{item_id}"
 
-    def add_to_cart(self, item_id: str, user_session_id: str, timestamp: Optional[float] = None) -> bool:
+    def add_to_cart(
+        self, item_id: str, user_session_id: str, timestamp: Optional[float] = None
+    ) -> bool:
         """
         Add or update a user session in the item's cart ZSET with a UNIX timestamp score.
 
@@ -85,13 +91,17 @@ class CartVelocityTracker:
         try:
             # ZREM key member
             removed = self.redis.zrem(key, user_session_id)
-            logger.debug(f"Removed session {user_session_id} from {key} (count: {removed})")
+            logger.debug(
+                f"Removed session {user_session_id} from {key} (count: {removed})"
+            )
             return bool(removed > 0)
         except Exception as e:
             logger.error(f"Error removing {user_session_id} from {key}: {e}")
             raise
 
-    def get_cart_velocity(self, item_id: str, window_seconds: Optional[int] = None) -> int:
+    def get_cart_velocity(
+        self, item_id: str, window_seconds: Optional[int] = None
+    ) -> int:
         """
         Computes the number of active shopping carts holding this item in the last 5 minutes.
 
@@ -107,7 +117,11 @@ class CartVelocityTracker:
             int: Number of active sessions currently holding this item in cart.
         """
         key = self._format_key(item_id)
-        window = window_seconds if window_seconds is not None else self.DEFAULT_WINDOW_SECONDS
+        window = (
+            window_seconds
+            if window_seconds is not None
+            else self.DEFAULT_WINDOW_SECONDS
+        )
         cutoff = time.time() - window
 
         try:
@@ -115,19 +129,27 @@ class CartVelocityTracker:
             self.redis.zremrangebyscore(key, "-inf", cutoff)
             # Count remaining active sessions
             active_count = self.redis.zcard(key)
-            logger.debug(f"Cart velocity for {item_id} (window {window}s): {active_count}")
+            logger.debug(
+                f"Cart velocity for {item_id} (window {window}s): {active_count}"
+            )
             return int(active_count)
         except Exception as e:
             logger.error(f"Error calculating cart velocity for {key}: {e}")
             raise
 
-    def get_active_sessions(self, item_id: str, window_seconds: Optional[int] = None) -> List[str]:
+    def get_active_sessions(
+        self, item_id: str, window_seconds: Optional[int] = None
+    ) -> List[str]:
         """
         Retrieves all active user session IDs currently holding the item.
         Prunes expired sessions prior to returning list.
         """
         key = self._format_key(item_id)
-        window = window_seconds if window_seconds is not None else self.DEFAULT_WINDOW_SECONDS
+        window = (
+            window_seconds
+            if window_seconds is not None
+            else self.DEFAULT_WINDOW_SECONDS
+        )
         cutoff = time.time() - window
 
         try:

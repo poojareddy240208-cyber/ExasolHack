@@ -70,6 +70,9 @@ OmniSync bridges the gap between high-throughput e-commerce checkout and in-data
 | `GET` | `/api/v1/golden-customers/{id}/investigation` | Module 1 — Identity Stitching | `200 OK` / `404` | Explainable AI (XAI) Identity Detective investigation evidence and confidence |
 | `GET` | `/api/v1/churn/alerts` | Module 4 — NLP Churn Early Warning Radar | `200 OK` | Recent VIP churn alerts |
 | `POST` | `/api/v1/churn/alerts/{ticket_id}/approve` | Module 4 — NLP Churn Early Warning Radar | `200 OK` / `404` | Approve and execute recommended VIP retention action |
+| `POST` | `/api/v1/churn/simulate` | Module 4 — NLP Churn Early Warning Radar | `200 OK` | Simulate real-time PyTorch NLP classification for customer ticket |
+| `POST` | `/api/v1/golden-customers/{candidate_id}/decide` | Module 1 — Identity Stitching | `200 OK` | Record human governance decision for identity candidate |
+| `POST` | `/api/v1/return-risk/simulate` | Module 3 — Dynamic Return Friction | `200 OK` | Context-aware return risk simulation sandbox |
 
 ---
 

@@ -25,17 +25,23 @@ UNAVAILABLE_DETAIL = (
 def _unavailable(db: Session, exc: SQLAlchemyError) -> HTTPException:
     db.rollback()  # leave the session usable
     logger.warning("Dashboard query failed: %s", exc)
-    return HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=UNAVAILABLE_DETAIL)
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=UNAVAILABLE_DETAIL
+    )
 
 
-def fetch_all(db: Session, sql: str, params: Optional[Dict[str, Any]] = None) -> List[Any]:
+def fetch_all(
+    db: Session, sql: str, params: Optional[Dict[str, Any]] = None
+) -> List[Any]:
     try:
         return list(db.execute(text(sql), params or {}).fetchall())
     except SQLAlchemyError as exc:
         raise _unavailable(db, exc)
 
 
-def fetch_one(db: Session, sql: str, params: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+def fetch_one(
+    db: Session, sql: str, params: Optional[Dict[str, Any]] = None
+) -> Optional[Any]:
     try:
         return db.execute(text(sql), params or {}).fetchone()
     except SQLAlchemyError as exc:

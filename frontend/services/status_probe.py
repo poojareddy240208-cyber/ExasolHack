@@ -13,7 +13,10 @@ import streamlit as st
 
 from frontend.services.live_bridge import API_BASE_URL, API_PREFIX
 
-STATUS_TIMEOUT = (2, 20)  # (connect, read) seconds; the API itself gives up on a dead Exasol after about 4 s
+STATUS_TIMEOUT = (
+    2,
+    20,
+)  # (connect, read) seconds; the API itself gives up on a dead Exasol after about 4 s
 CACHE_TTL_SECONDS = 3
 
 __all__ = ["get_system_health"]

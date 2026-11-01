@@ -14,7 +14,9 @@ class Settings(BaseSettings):
     Default values match local docker-compose network bindings.
     """
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     # General Environment
     PROJECT_NAME: str = "OmniSync Retail Analytics Platform"
@@ -38,8 +40,12 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = "omnisync_db"
     POSTGRES_HOST: str = "postgres"
     POSTGRES_PORT: int = 5432
-    POSTGRES_URL: str = "postgresql+asyncpg://omnisync:omnisync_secret@postgres:5432/omnisync_db"
-    POSTGRES_SYNC_URL: str = "postgresql://omnisync:omnisync_secret@postgres:5432/omnisync_db"
+    POSTGRES_URL: str = (
+        "postgresql+asyncpg://omnisync:omnisync_secret@postgres:5432/omnisync_db"
+    )
+    POSTGRES_SYNC_URL: str = (
+        "postgresql://omnisync:omnisync_secret@postgres:5432/omnisync_db"
+    )
 
     # =========================================================================
     # OLAP: Exasol Personal Edition Configuration (The Brain)

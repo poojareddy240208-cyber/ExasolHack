@@ -25,7 +25,9 @@ def test_all_stages_load_with_placeholders_filled():
     for file_name in BUILD_STAGES + [PROPAGATE_STAGE] + PUBLISH_STAGES:
         statements = load_sql(file_name, STITCHING_PARAMS)
         assert statements, f"{file_name} contains no statements"
-        assert all("${" not in stmt for stmt in statements), f"{file_name} has an unfilled placeholder"
+        assert all(
+            "${" not in stmt for stmt in statements
+        ), f"{file_name} has an unfilled placeholder"
 
 
 def test_propagation_stage_is_a_single_statement():

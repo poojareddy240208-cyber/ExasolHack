@@ -38,7 +38,9 @@ def get_return_risk_level(db: Session, user_id: Optional[str]) -> int:
         ).scalar()
     except SQLAlchemyError as exc:
         db.rollback()  # leave the session usable for the rest of the request
-        logger.warning("Return risk lookup failed, using level %d: %s", DEFAULT_RISK_LEVEL, exc)
+        logger.warning(
+            "Return risk lookup failed, using level %d: %s", DEFAULT_RISK_LEVEL, exc
+        )
         return DEFAULT_RISK_LEVEL
     if level is None:
         return DEFAULT_RISK_LEVEL

@@ -16,7 +16,11 @@ import backend.api.v1.endpoints.webhooks as webhooks
 from backend.celery_app import celery, process_zendesk_ticket_task
 from backend.main import app
 
-PAYLOAD = {"ticket_id": "ZD-RESILIENCE-1", "subject": "Late order", "description": "Where is it?"}
+PAYLOAD = {
+    "ticket_id": "ZD-RESILIENCE-1",
+    "subject": "Late order",
+    "description": "Where is it?",
+}
 
 
 @pytest.fixture
@@ -29,7 +33,13 @@ def test_handler_is_a_plain_function_so_the_event_loop_is_never_blocked():
 
 
 @pytest.mark.parametrize(
-    "error", [OperationalError("redis down"), TimeoutError("slow"), ConnectionRefusedError("refused"), OSError("net")]
+    "error",
+    [
+        OperationalError("redis down"),
+        TimeoutError("slow"),
+        ConnectionRefusedError("refused"),
+        OSError("net"),
+    ],
 )
 def test_broker_failure_returns_503_not_a_fake_queued(client, error):
     with patch.object(process_zendesk_ticket_task, "apply_async", side_effect=error):
@@ -39,7 +49,11 @@ def test_broker_failure_returns_503_not_a_fake_queued(client, error):
 
 
 def test_unexpected_error_does_not_leak_internal_details(client):
-    with patch.object(process_zendesk_ticket_task, "apply_async", side_effect=RuntimeError("secret-internal-detail")):
+    with patch.object(
+        process_zendesk_ticket_task,
+        "apply_async",
+        side_effect=RuntimeError("secret-internal-detail"),
+    ):
         response = client.post("/api/v1/webhooks/zendesk", json=PAYLOAD)
     assert response.status_code == 503
     assert "secret-internal-detail" not in response.text
@@ -47,7 +61,9 @@ def test_unexpected_error_does_not_leak_internal_details(client):
 
 def test_publish_is_bounded_so_an_outage_cannot_hang_the_request(client):
     fake_task = MagicMock(id="task-123")
-    with patch.object(process_zendesk_ticket_task, "apply_async", return_value=fake_task) as publish:
+    with patch.object(
+        process_zendesk_ticket_task, "apply_async", return_value=fake_task
+    ) as publish:
         response = client.post("/api/v1/webhooks/zendesk", json=PAYLOAD)
     assert response.status_code == 202
     assert response.json()["task_id"] == "task-123"

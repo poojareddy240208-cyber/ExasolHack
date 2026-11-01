@@ -28,7 +28,9 @@ logger = logging.getLogger("omnisync.system")
 router = APIRouter()
 
 PROBE_TIMEOUT_SECONDS = 4
-STALE_AFTER_SECONDS = 15 * 60  # the sync runs every 5 minutes; three missed runs means something is wrong
+STALE_AFTER_SECONDS = (
+    15 * 60
+)  # the sync runs every 5 minutes; three missed runs means something is wrong
 
 
 def probe_postgres() -> str:
@@ -38,7 +40,9 @@ def probe_postgres() -> str:
 
 
 def probe_redis() -> str:
-    client = redis.from_url(settings.REDIS_URL, socket_connect_timeout=1, socket_timeout=1)
+    client = redis.from_url(
+        settings.REDIS_URL, socket_connect_timeout=1, socket_timeout=1
+    )
     client.ping()
     return "PING ok"
 
@@ -57,12 +61,23 @@ def _timed(probe: Callable[[], str]) -> ServiceStatus:
     try:
         detail, state = probe(), "UP"
     except Exception as exc:  # any failure means the service is not usable
-        detail, state = f"{type(exc).__name__}: {' '.join(str(exc).split())[:120]}", "DOWN"
-    return ServiceStatus(status=state, latency_ms=round((time.perf_counter() - started) * 1000, 1), detail=detail)
+        detail, state = (
+            f"{type(exc).__name__}: {' '.join(str(exc).split())[:120]}",
+            "DOWN",
+        )
+    return ServiceStatus(
+        status=state,
+        latency_ms=round((time.perf_counter() - started) * 1000, 1),
+        detail=detail,
+    )
 
 
 def _run_probes() -> Dict[str, ServiceStatus]:
-    probes = {"postgres_oltp": probe_postgres, "redis_cache": probe_redis, "exasol_olap": probe_exasol}
+    probes = {
+        "postgres_oltp": probe_postgres,
+        "redis_cache": probe_redis,
+        "exasol_olap": probe_exasol,
+    }
     with ThreadPoolExecutor(max_workers=len(probes)) as pool:
         futures = {name: pool.submit(_timed, probe) for name, probe in probes.items()}
         results = {}
@@ -71,7 +86,9 @@ def _run_probes() -> Dict[str, ServiceStatus]:
                 results[name] = future.result(timeout=PROBE_TIMEOUT_SECONDS)
             except FutureTimeout:
                 results[name] = ServiceStatus(
-                    status="DOWN", latency_ms=PROBE_TIMEOUT_SECONDS * 1000.0, detail="no answer within the timeout"
+                    status="DOWN",
+                    latency_ms=PROBE_TIMEOUT_SECONDS * 1000.0,
+                    detail="no answer within the timeout",
                 )
     return results
 
@@ -123,7 +140,13 @@ def system_status(db: Session = Depends(get_db)):
     freshness = _freshness(db, now)
     row_counts = {
         table: _count(db, table)
-        for table in ("inventory", "sales_ledger", "golden_customers", "user_risk_cache", "retention_campaign_audit")
+        for table in (
+            "inventory",
+            "sales_ledger",
+            "golden_customers",
+            "user_risk_cache",
+            "retention_campaign_audit",
+        )
     }
     healthy = all(s.status == "UP" for s in services.values()) and not freshness.stale
     return SystemStatusResponse(

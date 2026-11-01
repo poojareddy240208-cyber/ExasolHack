@@ -158,7 +158,10 @@ class TestProcessZendeskTicketTask:
         insert_kwargs = mock_insert.call_args[1]
         assert insert_kwargs["ticket_id"] == "ZD-101"
         assert insert_kwargs["user_id"] == "user_456"
-        assert insert_kwargs["cleaned_text"] == "Hello, I ordered 3 shirts but only received 2. Please resolve ASAP!"
+        assert (
+            insert_kwargs["cleaned_text"]
+            == "Hello, I ordered 3 shirts but only received 2. Please resolve ASAP!"
+        )
 
     @patch("backend.celery_app.insert_staging_ticket")
     def test_task_processes_nested_zendesk_structure(self, mock_insert):
@@ -181,7 +184,10 @@ class TestProcessZendeskTicketTask:
         assert insert_kwargs["cleaned_text"] == "I am cancelling my subscription."
 
     def test_task_raises_on_missing_ticket_id(self):
-        invalid_payload = {"user_id": "user_123", "description": "No ticket id provided"}
+        invalid_payload = {
+            "user_id": "user_123",
+            "description": "No ticket id provided",
+        }
         with pytest.raises(ValueError, match="ticket_id"):
             process_zendesk_ticket_task(invalid_payload)
 
@@ -194,7 +200,9 @@ class TestProcessZendeskTicketTask:
         """Verifies Celery task triggers self.retry upon database connection/query errors."""
         mock_conn = MagicMock()
         mock_conn.options = {"verbose_error": False}
-        mock_insert.side_effect = pyexasol.ExaError(mock_conn, "Mock Exasol connection dropped")
+        mock_insert.side_effect = pyexasol.ExaError(
+            mock_conn, "Mock Exasol connection dropped"
+        )
 
         payload = {
             "ticket_id": "ZD-ERR-01",
@@ -203,7 +211,9 @@ class TestProcessZendeskTicketTask:
         }
 
         with patch.object(
-            process_zendesk_ticket_task, "retry", side_effect=Exception("Celery Retry Raised")
+            process_zendesk_ticket_task,
+            "retry",
+            side_effect=Exception("Celery Retry Raised"),
         ) as mock_retry:
             with pytest.raises(Exception, match="Celery Retry Raised"):
                 process_zendesk_ticket_task(payload)

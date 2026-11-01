@@ -43,7 +43,11 @@ class MockRedisZSet:
         min_val = float("-inf") if min_score == "-inf" else float(min_score)
         max_val = float("inf") if max_score == "+inf" else float(max_score)
 
-        to_remove = [member for member, score in self.data[key].items() if min_val <= score <= max_val]
+        to_remove = [
+            member
+            for member, score in self.data[key].items()
+            if min_val <= score <= max_val
+        ]
         for m in to_remove:
             del self.data[key][m]
         return len(to_remove)

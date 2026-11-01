@@ -115,7 +115,17 @@ RISK_B = {
 RISKS = {"Customer A": RISK_A, "Customer B": RISK_B}
 
 
-def _alert(ticket, score, urgency, cause, action, status="PENDING_REVIEW", hours=1, why="Because.", **extra):
+def _alert(
+    ticket,
+    score,
+    urgency,
+    cause,
+    action,
+    status="PENDING_REVIEW",
+    hours=1,
+    why="Because.",
+    **extra,
+):
     return {
         "ticket_id": ticket,
         "golden_customer_id": "DEMO-EVE-001",
@@ -151,15 +161,31 @@ WEDDING = _alert(
     "ESCALATE_HUMAN_CONCIERGE_AND_OVERNIGHT_REPLACEMENT",
     why="Critical urgency detected due to fulfillment failure. Human concierge escalation required.",
 )
-ALERTS = {"error": None, "since_hours": 24, "count_in_window": 2, "total_alerts": 2, "alerts": [FIT, WEDDING]}
+ALERTS = {
+    "error": None,
+    "since_hours": 24,
+    "count_in_window": 2,
+    "total_alerts": 2,
+    "alerts": [FIT, WEDDING],
+}
 APPROVED = {
     "success": True,
     "error": None,
     "status": "ACTION_EXECUTED",
     "message": "Action approved and executed successfully.",
 }
-ALREADY = {"success": True, "error": None, "status": "ACTION_EXECUTED", "message": "Action already executed."}
-EMPTY_INVENTORY = {"error": None, "redis_available": True, "total_active_carts_5m": 0, "items": []}
+ALREADY = {
+    "success": True,
+    "error": None,
+    "status": "ACTION_EXECUTED",
+    "message": "Action already executed.",
+}
+EMPTY_INVENTORY = {
+    "error": None,
+    "redis_available": True,
+    "total_active_carts_5m": 0,
+    "items": [],
+}
 
 
 def run_app(
@@ -178,11 +204,16 @@ def run_app(
         "get_system_health": MagicMock(return_value=health),
         "get_inventory": MagicMock(return_value=inventory),
         "get_identity_investigation": MagicMock(return_value=investigation),
-        "trigger_surge": MagicMock(return_value=surge or {"success": True, "attempted": 15, "successful": 15}),
-        "execute_checkout": MagicMock(
-            return_value=checkout or {"success": True, "order_id": "ORD-1", "remaining_stock": 49}
+        "trigger_surge": MagicMock(
+            return_value=surge or {"success": True, "attempted": 15, "successful": 15}
         ),
-        "get_return_risk": MagicMock(side_effect=lambda uid, *a, **k: (risks or RISKS)[uid]),
+        "execute_checkout": MagicMock(
+            return_value=checkout
+            or {"success": True, "order_id": "ORD-1", "remaining_stock": 49}
+        ),
+        "get_return_risk": MagicMock(
+            side_effect=lambda uid, *a, **k: (risks or RISKS)[uid]
+        ),
         "get_churn_alerts": MagicMock(return_value=alerts),
         "approve_churn_action": MagicMock(return_value=approval or APPROVED),
     }
@@ -244,9 +275,9 @@ def test_sidebar_shows_red_lights_and_a_fix_when_the_backend_is_down(launch):
 def test_a_stale_sync_tells_the_operator_what_to_check(launch):
     stale = {**HEALTH_UP, "data_freshness": {"age_seconds": 1500.0, "stale": True}}
     app, _ = launch(health=stale)
-    assert "Last Exasol sync was 25 min ago" in texts(app.sidebar.markdown) and "Celery Beat" in texts(
+    assert "Last Exasol sync was 25 min ago" in texts(
         app.sidebar.markdown
-    )
+    ) and "Celery Beat" in texts(app.sidebar.markdown)
 
 
 def test_theme_follows_the_design_rules(launch):
@@ -270,11 +301,18 @@ def test_inventory_metrics_and_table(launch):
         "Active carts (5 min)": "12",
     }
     table = texts(app.tabs[0].markdown)
-    assert "RTX 4090" in table and "SKU-B" in table and "30 of 50 available, 20 held back" in table
+    assert (
+        "RTX 4090" in table
+        and "SKU-B" in table
+        and "30 of 50 available, 20 held back" in table
+    )
 
 
 def test_backend_text_is_escaped_in_the_table(launch):
-    hostile = {**INVENTORY, "items": [{**INVENTORY["items"][0], "name": "<script>alert(1)</script>"}]}
+    hostile = {
+        **INVENTORY,
+        "items": [{**INVENTORY["items"][0], "name": "<script>alert(1)</script>"}],
+    }
     app, _ = launch(inventory=hostile)
     table = texts(app.tabs[0].markdown)
     assert "<script>" not in table and "&lt;script&gt;" in table
@@ -282,15 +320,22 @@ def test_backend_text_is_escaped_in_the_table(launch):
 
 def test_inventory_error_and_empty_states_explain_the_fix(launch):
     app, _ = launch(inventory={**EMPTY_INVENTORY, "error": "Backend unreachable"})
-    assert "python -m scripts.bootstrap" in app.tabs[0].error[0].value and not app.exception
+    assert (
+        "python -m scripts.bootstrap" in app.tabs[0].error[0].value
+        and not app.exception
+    )
     app, _ = launch(inventory=EMPTY_INVENTORY)
     assert "No inventory yet" in app.tabs[0].info[0].value
 
 
 def test_redis_outage_keeps_the_page_and_warns(launch):
-    app, _ = launch(inventory={**INVENTORY, "redis_available": False, "total_active_carts_5m": None})
+    app, _ = launch(
+        inventory={**INVENTORY, "redis_available": False, "total_active_carts_5m": None}
+    )
     assert "Redis is not answering" in app.tabs[0].warning[0].value
-    assert {m.label: m.value for m in app.tabs[0].metric}["Active carts (5 min)"] == "n/a"
+    assert {m.label: m.value for m in app.tabs[0].metric}[
+        "Active carts (5 min)"
+    ] == "n/a"
 
 
 def test_surge_button_fires_several_bursts_then_reports(launch):
@@ -299,9 +344,14 @@ def test_surge_button_fires_several_bursts_then_reports(launch):
     app.button(key="surge").click().run()
     assert not app.exception
     calls = mocks["trigger_surge"].call_args_list
-    assert len(calls) == 3 and all(c.args == ("SKU-A",) and c.kwargs == {"count": 15} for c in calls)
+    assert len(calls) == 3 and all(
+        c.args == ("SKU-A",) and c.kwargs == {"count": 15} for c in calls
+    )
     message = app.tabs[0].success[0].value
-    assert "Sent 45 of 45 simulated shoppers to RTX 4090" in message and "from 9 to 9" in message
+    assert (
+        "Sent 45 of 45 simulated shoppers to RTX 4090" in message
+        and "from 9 to 9" in message
+    )
 
 
 def test_surge_shows_the_cart_spike_after_the_redraw(launch):
@@ -309,17 +359,29 @@ def test_surge_shows_the_cart_spike_after_the_redraw(launch):
     spiked = {
         **INVENTORY,
         "total_active_carts_5m": 57,
-        "items": [{**INVENTORY["items"][0], "active_carts_5m": 54}, INVENTORY["items"][1]],
+        "items": [
+            {**INVENTORY["items"][0], "active_carts_5m": 54},
+            INVENTORY["items"][1],
+        ],
     }
     # like the real bridge, the inventory only changes once the surge has been sent
-    mocks["get_inventory"].side_effect = lambda: spiked if mocks["trigger_surge"].call_count else INVENTORY
+    mocks["get_inventory"].side_effect = lambda: (
+        spiked if mocks["trigger_surge"].call_count else INVENTORY
+    )
     app.button(key="surge").click().run()
     assert "Active carts went from 9 to 54" in app.tabs[0].success[0].value
-    assert {m.label: m.value for m in app.tabs[0].metric}["Active carts (5 min)"] == "57"
+    assert {m.label: m.value for m in app.tabs[0].metric}[
+        "Active carts (5 min)"
+    ] == "57"
 
 
 def test_surge_failure_is_explained(launch):
-    failed = {"success": False, "attempted": 15, "successful": 0, "error": "Failed to reach Redis"}
+    failed = {
+        "success": False,
+        "attempted": 15,
+        "successful": 0,
+        "error": "Failed to reach Redis",
+    }
     app, _ = launch(surge=failed)
     app.button(key="surge").click().run()
     assert (
@@ -364,20 +426,38 @@ def test_virtual_safety_buffer_rejection_explains_the_numbers(launch):
 
 
 def test_optimistic_lock_rejection_and_the_stale_version_option(launch):
-    conflict = {"success": False, "status": "CONFLICT", "error": "Concurrent transaction conflict. Please retry."}
+    conflict = {
+        "success": False,
+        "status": "CONFLICT",
+        "error": "Concurrent transaction conflict. Please retry.",
+    }
     app, mocks = launch(checkout=conflict)
     place_order(app, sku="SKU-A", quantity=1, stale=True)
-    assert mocks["execute_checkout"].call_args.args[0]["expected_version"] == 3  # current version 4, minus one
+    assert (
+        mocks["execute_checkout"].call_args.args[0]["expected_version"] == 3
+    )  # current version 4, minus one
     assert "optimistic lock" in app.tabs[0].error[0].value
 
 
 @pytest.mark.parametrize(
     "result,expected",
     [
-        ({"success": False, "status": "NOT_FOUND", "error": "gone"}, "not in the catalog"),
-        ({"success": False, "status": "VALIDATION_ERROR", "error": "quantity: bad"}, "not valid: quantity: bad"),
-        ({"success": False, "status": "UNREACHABLE", "error": "refused"}, "Cannot reach the backend"),
-        ({"success": False, "status": "HTTP_500", "error": "boom"}, "The order failed: boom"),
+        (
+            {"success": False, "status": "NOT_FOUND", "error": "gone"},
+            "not in the catalog",
+        ),
+        (
+            {"success": False, "status": "VALIDATION_ERROR", "error": "quantity: bad"},
+            "not valid: quantity: bad",
+        ),
+        (
+            {"success": False, "status": "UNREACHABLE", "error": "refused"},
+            "Cannot reach the backend",
+        ),
+        (
+            {"success": False, "status": "HTTP_500", "error": "boom"},
+            "The order failed: boom",
+        ),
     ],
     ids=["missing", "invalid", "down", "other"],
 )
@@ -397,8 +477,15 @@ def test_identity_investigates_the_demo_customer_by_default(launch):
 def test_identity_shows_the_confidence_prominently(launch):
     app, _ = launch()
     page = texts(app.tabs[1].markdown)
-    assert "95%" in page and "match confidence" in page and "Match confidence 95 percent" in page
-    assert "Very likely the same person" in page and "Strong candidate, waiting for review" in page
+    assert (
+        "95%" in page
+        and "match confidence" in page
+        and "Match confidence 95 percent" in page
+    )
+    assert (
+        "Very likely the same person" in page
+        and "Strong candidate, waiting for review" in page
+    )
 
 
 def test_identity_evidence_columns(launch):
@@ -412,29 +499,59 @@ def test_identity_evidence_columns(launch):
     )
 
 
-@pytest.mark.parametrize("score,verdict", [(95, "Very likely"), (70, "Possibly"), (20, "Probably different")])
+@pytest.mark.parametrize(
+    "score,verdict", [(95, "Very likely"), (70, "Possibly"), (20, "Probably different")]
+)
 def test_confidence_verdict_follows_the_score(launch, score, verdict):
     app, _ = launch(investigation={**INVESTIGATION, "confidence_score": score})
-    assert verdict in texts(app.tabs[1].markdown) and f"{score}%" in texts(app.tabs[1].markdown)
+    assert verdict in texts(app.tabs[1].markdown) and f"{score}%" in texts(
+        app.tabs[1].markdown
+    )
 
 
 def test_identity_empty_evidence_and_unknown_status(launch):
-    bare = {**INVESTIGATION, "supporting_evidence": [], "counter_evidence": [], "decision_status": "NEEDS_MORE_DATA"}
+    bare = {
+        **INVESTIGATION,
+        "supporting_evidence": [],
+        "counter_evidence": [],
+        "decision_status": "NEEDS_MORE_DATA",
+    }
     app, _ = launch(investigation=bare)
     page = texts(app.tabs[1].markdown)
-    assert "No counter-evidence was found." in page and "No supporting evidence was recorded." in page
+    assert (
+        "No counter-evidence was found." in page
+        and "No supporting evidence was recorded." in page
+    )
     assert "Needs more data" in page
 
 
 def test_identity_errors_are_helpful(launch):
-    app, _ = launch(investigation={"error": "Customer 'X' not found in Golden Record.", "found": False})
-    assert "No investigation exists for DEMO-EVE-001" in app.tabs[1].info[0].value and not app.exception
-    app, _ = launch(investigation={"error": "Backend unreachable at http://api:8000", "found": False})
+    app, _ = launch(
+        investigation={
+            "error": "Customer 'X' not found in Golden Record.",
+            "found": False,
+        }
+    )
+    assert (
+        "No investigation exists for DEMO-EVE-001" in app.tabs[1].info[0].value
+        and not app.exception
+    )
+    app, _ = launch(
+        investigation={
+            "error": "Backend unreachable at http://api:8000",
+            "found": False,
+        }
+    )
     assert "Cannot load the investigation" in app.tabs[1].error[0].value
 
 
 def test_evidence_text_from_the_backend_is_escaped(launch):
-    app, _ = launch(investigation={**INVESTIGATION, "supporting_evidence": ["<img src=x onerror=alert(1)>"]})
+    app, _ = launch(
+        investigation={
+            **INVESTIGATION,
+            "supporting_evidence": ["<img src=x onerror=alert(1)>"],
+        }
+    )
     page = texts(app.tabs[1].columns[-2].markdown)
     assert "<img" not in page and "&lt;img" in page
 
@@ -447,7 +564,9 @@ def test_streamlit_theme_config_is_dark_ocean_depths_and_shipped_in_the_image():
     assert 'base = "dark"' in config
     for color in ("#1a2332", "#2d8b8b", "#f1faee"):
         assert color in config
-    assert "COPY .streamlit" in (root / "Dockerfile.frontend").read_text(encoding="utf-8")
+    assert "COPY .streamlit" in (root / "Dockerfile.frontend").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_icon_font_is_not_overridden_by_the_theme(launch):
@@ -461,7 +580,10 @@ def test_launching_twice_in_one_test_leaves_the_real_bridge_untouched():
     """Regression: stacked patches undone in the wrong order once left fakes installed for every later test."""
     from frontend.services import live_bridge
 
-    real = {name: getattr(live_bridge, name) for name in ("get_inventory", "get_system_health", "trigger_surge")}
+    real = {
+        name: getattr(live_bridge, name)
+        for name in ("get_inventory", "get_system_health", "trigger_surge")
+    }
     with ExitStack() as stack:
         run_app(stack)
         run_app(stack, health=HEALTH_DOWN)
@@ -476,9 +598,14 @@ def metric_values(tab):
 def test_returns_tab_loads_both_demo_customers(launch):
     app, mocks = launch()
     assert not app.exception
-    assert [c.args[0] for c in mocks["get_return_risk"].call_args_list] == ["Customer A", "Customer B"]
+    assert [c.args[0] for c in mocks["get_return_risk"].call_args_list] == [
+        "Customer A",
+        "Customer B",
+    ]
     page = texts(app.tabs[2].markdown)
-    assert "Customer A (Unlucky VIP)" in page and "Customer B (Serial Wardrober)" in page
+    assert (
+        "Customer A (Unlucky VIP)" in page and "Customer B (Serial Wardrober)" in page
+    )
     assert "Context-aware returns" in page
 
 
@@ -491,7 +618,10 @@ def test_raw_return_rate_is_shown_next_to_the_risk_level(launch):
         ("Risk level", "Level 5"),
     ]
     page = texts(app.tabs[2].markdown)
-    assert "By raw rate alone this shopper would be <b>Level 5</b>. With context they are <b>Level 1</b>." in page
+    assert (
+        "By raw rate alone this shopper would be <b>Level 5</b>. With context they are <b>Level 1</b>."
+        in page
+    )
     assert "Risk level 1 of 5" in page and "Risk level 5 of 5" in page
 
 
@@ -499,7 +629,10 @@ def test_the_explanation_is_prominent_for_both_customers(launch):
     app, _ = launch()
     page = texts(app.tabs[2].markdown)
     assert "Why this level" in page
-    assert "Forgiven: 5 of 6 returns (83%) came from defective supplier batch BATCH-8992." in page
+    assert (
+        "Forgiven: 5 of 6 returns (83%) came from defective supplier batch BATCH-8992."
+        in page
+    )
     assert "Penalized: all 4 returns were flagged as suspected wardrobing." in page
     assert "Forgiven by context" in page and "Penalty applied" in page
 
@@ -515,17 +648,33 @@ def test_returns_tab_has_expanders_with_policy_and_numbers(launch):
     app, _ = launch()
     labels = [e.label for e in app.tabs[2].expander]
     assert labels.count("What this level means for the shopper") == 2
-    assert labels.count("The numbers behind it") == 2 and "How the model weighs a return" in labels
+    assert (
+        labels.count("The numbers behind it") == 2
+        and "How the model weighs a return" in labels
+    )
     details = " ".join(m.value for e in app.tabs[2].expander for m in e.markdown)
-    assert "Restocking fee: $5.00" in details and "Cash on delivery: not available" in details
+    assert (
+        "Restocking fee: $5.00" in details
+        and "Cash on delivery: not available" in details
+    )
     assert "Returns in the last 6 months: 6" in details and "counts as **0**" in details
 
 
 def test_returns_error_never_shows_a_level(launch):
-    down = {"error": "Backend unreachable", "found": False, "risk_level": 1, "user_id": "x"}
+    down = {
+        "error": "Backend unreachable",
+        "found": False,
+        "risk_level": 1,
+        "user_id": "x",
+    }
     app, _ = launch(risks={"Customer A": down, "Customer B": down})
-    assert len(app.tabs[2].error) == 2 and "Backend unreachable" in app.tabs[2].error[0].value
-    assert metric_values(app.tabs[2]) == []  # the bridge's fallback says level 1; it must not be drawn as a verdict
+    assert (
+        len(app.tabs[2].error) == 2
+        and "Backend unreachable" in app.tabs[2].error[0].value
+    )
+    assert (
+        metric_values(app.tabs[2]) == []
+    )  # the bridge's fallback says level 1; it must not be drawn as a verdict
     assert not app.exception
 
 
@@ -533,16 +682,26 @@ def test_returns_unknown_customer_explains_the_fix(launch):
     unknown = {"error": None, "found": False, "risk_level": 1, "user_id": "x"}
     app, _ = launch(risks={"Customer A": unknown, "Customer B": RISK_B})
     assert "No return history for Customer A" in app.tabs[2].info[0].value
-    assert metric_values(app.tabs[2]) == [("Raw return rate", "100%"), ("Risk level", "Level 5")]
+    assert metric_values(app.tabs[2]) == [
+        ("Raw return rate", "100%"),
+        ("Risk level", "Level 5"),
+    ]
 
 
 def test_returns_edge_cases(launch):
-    odd = {**RISK_A, "return_rate": None, "xai_explanation": None, "staleness_warning": True}
+    odd = {
+        **RISK_A,
+        "return_rate": None,
+        "xai_explanation": None,
+        "staleness_warning": True,
+    }
     app, _ = launch(risks={"Customer A": odd, "Customer B": RISK_B})
     page = texts(app.tabs[2].markdown)
     assert ("Raw return rate", "n/a") in metric_values(app.tabs[2])
     assert "No explanation was recorded for this score." in page
-    assert page.count("By raw rate alone this shopper") == 1  # only Customer B: without a rate there is no comparison
+    assert (
+        page.count("By raw rate alone this shopper") == 1
+    )  # only Customer B: without a rate there is no comparison
     assert "more than 24 hours old" in app.tabs[2].warning[0].value
 
 
@@ -579,8 +738,14 @@ def test_radar_shows_the_recommended_action_and_the_reason(launch):
     assert "Escalate to a human concierge and ship an overnight replacement" in page
     assert "Send a prepaid return label automatically" in page
     assert "Why the AI chose this" in page
-    assert "Critical urgency detected due to fulfillment failure. Human concierge escalation required." in page
-    assert "Product preference issue detected. Automated prepaid return label recommended." in page
+    assert (
+        "Critical urgency detected due to fulfillment failure. Human concierge escalation required."
+        in page
+    )
+    assert (
+        "Product preference issue detected. Automated prepaid return label recommended."
+        in page
+    )
 
 
 def test_radar_puts_the_most_urgent_ticket_first(launch):
@@ -611,8 +776,13 @@ def test_approving_calls_the_backend_and_confirms(launch):
     app, mocks = launch()
     app.button(key="approve_ZD-DEMO-WEDDING-002").click().run()
     assert not app.exception
-    mocks["approve_churn_action"].assert_called_once_with("ZD-DEMO-WEDDING-002", "supervisor")
-    assert "Action for ZD-DEMO-WEDDING-002 approved and executed by supervisor." in app.tabs[3].success[0].value
+    mocks["approve_churn_action"].assert_called_once_with(
+        "ZD-DEMO-WEDDING-002", "supervisor"
+    )
+    assert (
+        "Action for ZD-DEMO-WEDDING-002 approved and executed by supervisor."
+        in app.tabs[3].success[0].value
+    )
     assert any("Action executed" in t.value for t in app.toast)
 
 
@@ -626,7 +796,10 @@ def test_the_approver_name_is_sent_to_the_backend(launch):
 def test_a_repeat_approval_proves_it_is_idempotent(launch):
     app, mocks = launch(approval=ALREADY)
     app.button(key="approve_ZD-DEMO-WEDDING-002").click().run()
-    assert "was already executed, so nothing ran a second time" in app.tabs[3].success[0].value
+    assert (
+        "was already executed, so nothing ran a second time"
+        in app.tabs[3].success[0].value
+    )
     assert any("No duplicate action was sent" in t.value for t in app.toast)
 
 
@@ -643,14 +816,26 @@ def test_an_executed_alert_says_so_and_stays_safe_to_press(launch):
     )
     app, _ = launch(alerts={**ALERTS, "alerts": [done], "count_in_window": 1})
     page = texts(app.tabs[3].markdown)
-    assert "Action executed" in page and "Already executed. Pressing the button again is safe" in page
+    assert (
+        "Action executed" in page
+        and "Already executed. Pressing the button again is safe" in page
+    )
     assert "Approved by: supervisor" in page and "Billing error" in page
-    assert [b.key for b in app.tabs[3].button] == ["approve_ZD-DONE-1"]  # still pressable on purpose
-    assert metric_values(app.tabs[3])[:2] == [("Waiting for approval", "0"), ("Executed", "1")]
+    assert [b.key for b in app.tabs[3].button] == [
+        "approve_ZD-DONE-1"
+    ]  # still pressable on purpose
+    assert metric_values(app.tabs[3])[:2] == [
+        ("Waiting for approval", "0"),
+        ("Executed", "1"),
+    ]
 
 
 def test_a_failed_approval_is_explained(launch):
-    failed = {"success": False, "status": "NOT_FOUND", "error": "Alert ticket 'ZD-X' not found."}
+    failed = {
+        "success": False,
+        "status": "NOT_FOUND",
+        "error": "Alert ticket 'ZD-X' not found.",
+    }
     app, _ = launch(approval=failed)
     app.button(key="approve_ZD-DEMO-FIT-001").click().run()
     assert "Could not approve ZD-DEMO-FIT-001" in app.tabs[3].error[0].value
@@ -659,8 +844,13 @@ def test_a_failed_approval_is_explained(launch):
 
 def test_radar_error_and_empty_states(launch):
     app, _ = launch(alerts={"error": "Backend unreachable", "alerts": []})
-    assert "python -m scripts.bootstrap" in app.tabs[3].error[0].value and not app.exception
-    app, _ = launch(alerts={"error": None, "alerts": [], "count_in_window": 0, "since_hours": 24})
+    assert (
+        "python -m scripts.bootstrap" in app.tabs[3].error[0].value
+        and not app.exception
+    )
+    app, _ = launch(
+        alerts={"error": None, "alerts": [], "count_in_window": 0, "since_hours": 24}
+    )
     assert "No tickets need attention" in app.tabs[3].info[0].value
 
 
@@ -685,12 +875,23 @@ def test_surge_ticks_the_demo_guide_and_is_logged(launch):
     assert app.checkbox(key="guide_surge").value is False
     app.button(key="surge").click().run()
     assert app.checkbox(key="guide_surge").value is True
-    assert any("Surge: 45 simulated shoppers" in line for line in app.session_state["activity_log"])
-    assert "1 of 5 steps done" in texts(app.sidebar.markdown) + str([p.text for p in app.sidebar.get("progress")])
+    assert any(
+        "Surge: 45 simulated shoppers" in line
+        for line in app.session_state["activity_log"]
+    )
+    assert "1 of 5 steps done" in texts(app.sidebar.markdown) + str(
+        [p.text for p in app.sidebar.get("progress")]
+    )
 
 
 def test_a_refused_order_ticks_the_blocked_step(launch):
-    app, _ = launch(checkout={"success": False, "status": "CONFLICT", "error": "Item is in high demand, reserved."})
+    app, _ = launch(
+        checkout={
+            "success": False,
+            "status": "CONFLICT",
+            "error": "Item is in high demand, reserved.",
+        }
+    )
     place_order(app)
     assert app.checkbox(key="guide_blocked").value is True
 

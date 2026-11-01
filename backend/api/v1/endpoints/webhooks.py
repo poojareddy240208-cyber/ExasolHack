@@ -31,25 +31,37 @@ router = APIRouter()
 def handle_zendesk_webhook(
     payload: ZendeskTicketPayload,
     x_zendesk_signature: Optional[str] = Header(
-        None, description="HMAC verification signature provided by Zendesk webhook settings"
+        None,
+        description="HMAC verification signature provided by Zendesk webhook settings",
     ),
 ):
     """
     Synchronously accepts Zendesk support ticket payload in a worker thread.
     Avoids API timeouts and event-loop blocking by pushing directly to Redis / Celery task queue with a tight timeout.
     """
-    logger.info(f"Received Zendesk ticket webhook: {payload.ticket_id} for user {payload.email or payload.user_id}")
+    logger.info(
+        f"Received Zendesk ticket webhook: {payload.ticket_id} for user {payload.email or payload.user_id}"
+    )
 
     try:
         from backend.celery_app import process_zendesk_ticket_task
 
-        payload_dict = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload.dict()
+        payload_dict = (
+            payload.model_dump(mode="json")
+            if hasattr(payload, "model_dump")
+            else payload.dict()
+        )
         task = process_zendesk_ticket_task.apply_async(
             args=[payload_dict],
             expires=10,
             # Publish at most twice, 0.2s apart: with Redis down the API answers 503 in seconds, not minutes.
             retry=True,
-            retry_policy={"max_retries": 1, "interval_start": 0, "interval_step": 0.2, "interval_max": 0.5},
+            retry_policy={
+                "max_retries": 1,
+                "interval_start": 0,
+                "interval_step": 0.2,
+                "interval_max": 0.5,
+            },
         )
         active_task_id = task.id
     except (OperationalError, ConnectionError, TimeoutError, OSError) as exc:
@@ -59,7 +71,10 @@ def handle_zendesk_webhook(
             detail="Message broker unavailable. Unable to enqueue support ticket.",
         )
     except Exception as exc:
-        logger.error(f"Unexpected error enqueuing Zendesk ticket {payload.ticket_id}: {exc}", exc_info=True)
+        logger.error(
+            f"Unexpected error enqueuing Zendesk ticket {payload.ticket_id}: {exc}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Service unavailable. Unable to enqueue support ticket.",  # no internal error text

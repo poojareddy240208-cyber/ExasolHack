@@ -21,7 +21,10 @@ from backend.core.config import settings
 from backend.api.v1.router import api_v1_router
 
 # Configure structured logging
-logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+logging.basicConfig(
+    level=settings.LOG_LEVEL,
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+)
 logger = logging.getLogger("omnisync.main")
 
 
@@ -34,8 +37,12 @@ async def lifespan(app: FastAPI):
     logger.info("================================================================")
     logger.info(f"Starting {settings.PROJECT_NAME} v{settings.VERSION}")
     logger.info(f"Environment: {settings.ENVIRONMENT} | Debug: {settings.DEBUG}")
-    logger.info(f"OLTP Target: PostgreSQL @ {settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}")
-    logger.info(f"OLAP Target: Exasol @ {settings.EXASOL_HOST}:{settings.EXASOL_PORT} (Privileged)")
+    logger.info(
+        f"OLTP Target: PostgreSQL @ {settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}"
+    )
+    logger.info(
+        f"OLAP Target: Exasol @ {settings.EXASOL_HOST}:{settings.EXASOL_PORT} (Privileged)"
+    )
     logger.info(f"Broker Target: Redis @ {settings.REDIS_HOST}:{settings.REDIS_PORT}")
     logger.info("================================================================")
     yield
